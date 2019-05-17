@@ -1,0 +1,120 @@
+---
+title: "Format UCSC cellbrowser"
+author: "Kent Riemondy RBI"
+date: "5/17/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Cellbrowser
+
+Format seurat object into a cellbrowser directory suitable for html browser. 
+
+```{r}
+source("../R/utils.R")
+library(tidyverse)
+sobj <- readRDS(file.path("objects", "sobj.rds"))
+```
+
+Simplify object metadata to make interpretable
+
+```{r}
+cols <- colnames(sobj@meta.data)
+cols_to_keep <- c(
+  `genes per cell` = "nFeature_RNA",
+  `UMIs per cell` = "nCount_RNA",
+  `percent of UMIs as mitochondria` = "percent.mt",
+  `clusters` = "seurat_clusters",
+  `subtype` = "subgroup",
+  `Dx` = "Dx",
+  `UPN` = "UPN")
+sobj@meta.data <- sobj@meta.data[, cols_to_keep]
+colnames(sobj@meta.data) <- names(cols_to_keep)
+Idents(sobj) <- "clusters"
+
+```
+
+
+
+```{r}
+outdir <- "cellbrowser"
+dir.create(outdir, showWarnings = FALSE)
+# write out rds files with names listed in sobjs
+saveRDS(sobj,file.path(outdir, "cb.rds"))
+```
+
+## Set colors
+
+```{r}
+## default palette (see ../../R/globals.R)
+col_palette <- discrete_palette_default
+
+## summarize per cluster annotations
+to_map <- c("clusters",
+            "subtype",
+            "UPN")
+col_map <- as.list(sobj@meta.data[, to_map]) %>%
+      map(~as.character(unique(.x)))
+
+res <- list()
+
+tmp <- col_palette[1:length(col_map$clusters)]
+names(tmp) <- col_map$clusters
+res$clusters <- tmp 
+
+tmp <- col_palette[1:length(col_map$UPN)]
+names(tmp) <- col_map$UPN
+res$UPN <- tmp 
+  
+tmp <- col_palette[1:length(col_map$subtype)]
+names(tmp) <- col_map$subtype
+res$subtype <- tmp 
+
+map_dfr(res, 
+        ~tibble(clusterName = names(.x), 
+                color = .x)) %>% 
+  as.data.frame() %>% 
+  write_csv("cellbrowser/colorMap.csv", col_names = F, quote_escape = "none")
+
+```
+
+
+Build cellbrowser objects. Note requires UCSC (`cellbrowser python package`[ https://cellbrowser.readthedocs.io/index.html])
+
+```{r}
+dir.create("cellbrowser/markers", recursive = TRUE)
+cols <- colnames(sobj@meta.data)
+names(cols) <- colnames(sobj@meta.data)
+mkrs <- read_tsv("markers/per_cluster_markers.tsv") %>% 
+  select(cluster, gene, p_val_adj, everything())
+
+write_tsv(mkrs, "cellbrowser/markers/cluster_markers.tsv")
+
+do.call(function(...) {ExportToCellbrowser(sobj, 
+                    dir = file.path("cellbrowser", "medulloblastoma"),
+                    dataset.name = "medulloblastoma",
+                    reductions = c("umap", "umap_unmerged"),
+                    markers.file = "cellbrowser/markers/cluster_markers.tsv",
+                    cluster.field = "clusters",
+                    ...)}, 
+        as.list(cols))
+
+```
+
+
+
+```{bash}
+cd cellbrowser
+echo -e '\ncolors="/Users/kriemo/Projects/sc_repos/medulloblast/results/cellbrowser/colorMap.csv"' >> medulloblastoma/cellbrowser.conf
+```
+
+
+```{bash}
+cd cellbrowser
+/miniconda3/bin/cbBuild \
+-i medulloblastoma/cellbrowser.conf \
+-o mblast
+```
