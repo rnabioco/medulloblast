@@ -35,10 +35,6 @@ mkrs_dir <- "markers"
 walk(c(fig_dir,mkrs_dir), dir.create, showWarnings = F)
 ```
 
-
-# Experiment Summary
-
-
 ```{r get_data}
 
 # read in metadata to parse out directories and sample ids
@@ -48,9 +44,6 @@ mdata <- read_excel(file.path(doc_dir,
 
 sobj <- readRDS(file.path("objects", "unfiltered.rds"))
 ```
-
-Annotate samples and assign colors to each sample
-
 
 ```{r}
 
@@ -83,7 +76,7 @@ col_pal <- get_distinct_cols(annots$subgroup)
 names(col_pal) <- annots$UPN
 ```
 
-## General QC for library prep  {.tabset}
+## General library statistics  {.tabset}
 
 ```{r }
 
@@ -136,6 +129,7 @@ for(i in seq_along(p)){
 
 
 
+## General QC metrics {.tabset}
 
 ### Percent Mitochondrial UMIs 
 
@@ -172,6 +166,7 @@ sobj@meta.data %>%
 
 ```
 
+
 ## Relationship between UMIs and # of genes {.tabset}
 
 ### All samples
@@ -195,7 +190,7 @@ plot_grid(plotlist= p, nrow = 5, ncol = 7)
 # see https://stackoverflow.com/questions/43752095/programmatically-insert-header-and-plot-in-same-code-chunk-with-r-markdown-using?noredirect=1&lq=1
 
 for(i in seq_along(per_sample)){
-  col <- discrete_palette_default[i]
+  .col <- discrete_palette_default[i]
   cat('\n### ', sample_names[i], '\n')
   p <- ggplot(per_sample[[i]], aes(nFeature_RNA, nCount_RNA)) +
         geom_point(aes(color = UPN)) +
@@ -227,13 +222,11 @@ plot_grid(plotlist= p, nrow = 5, ncol = 7)
 
 ```{r, results ='asis'}
 
-
-
 # generate tab with individual plot programmatically 
 # see https://stackoverflow.com/questions/43752095/programmatically-insert-header-and-plot-in-same-code-chunk-with-r-markdown-using?noredirect=1&lq=1
 
 for(i in seq_along(per_sample)){
-  col <- discrete_palette_default[i]
+  .col <- discrete_palette_default[i]
   cat('\n### ', sample_names[i], '\n')
   p <- ggplot(per_sample[[i]], aes(nCount_RNA, percent.mt)) +
         geom_point(aes(color = UPN)) +
@@ -246,10 +239,12 @@ for(i in seq_along(per_sample)){
 
 
 
+
 ## Filter cells and samples.
 
-Suggest removing cells with > 30% mitochondrial UMIs, > 40K UMIs. Consider also dropping samples with median mito UMIs > 30% These libraries would be `1155`, `996`, `1128`, and `898`. Keeping these libraries for now, but should revisit this point. 
+I suggest removing cells with > 30% mitochondrial UMIs, > 40K UMIs. Consider also dropping samples with median mito UMIs > 30% These libraries would be `1155`, `996`, `1128`, and `898`. Keeping these libraries for now, but should revisit this point. 
 
+Shown below are the number of cells remaining in each sample and subtype post filtering. There are `r nrow(sobj@meta.data)` total cells in the dataset post filtering. 
 
 ```{r}
 sobj <- readRDS(file.path("objects", "sobj.rds"))
@@ -269,6 +264,10 @@ group_by(sobj@meta.data, subgroup) %>%
 
 
 ## Normalize and embed into 2D with UMAP {.tabset}
+
+All the cells passing initial QC are embedding into 2 dimensions using the UMAP algorithm. Shown below are the 2D projections with cells labeled by either the sample or the subtype of origin. I've additionally plotted a handful of genes, the number of UMIs per cell, and the percentage of reads derived from mitochondrial reads. 
+
+Note that some of the samples were annotated as `TBD`, which I presume means to be determined. 
 
 ```{r}
 unaligned_dir <- file.path(fig_dir, "unaligned")
@@ -335,6 +334,7 @@ save_plot(file.path(unaligned_dir,"umap_by_pt_mitochondria.pdf"), p, base_asp = 
 
 ## Align data and reembed into 2D with UMAP {.tabset}
 
+Given that many of the samples seem to cluster independently I've also tried using a few dataset alignment methods to improve the clustering. Shown below are new UMAP projections derived from using the Harmony algorithm. 
 
 ```{r}
 aligned_dir <- file.path(fig_dir, "aligned")
@@ -400,4 +400,131 @@ save_plot(file.path(aligned_dir,"umap_by_nUMI.pdf"), p, base_asp = 1.75)
 p <- plot_umap(sobj, "percent.mt", pt_alpha = 0.75)
 p
 save_plot(file.path(aligned_dir,"umap_by_pt_mitochondria.pdf"), p, base_asp = 1.75)
+```
+
+## Clustering and finding markers per cluster 
+
+Next I've done some preliminary clustering to try to identify cell types. 
+
+
+```{r}
+p <- plot_umap(sobj, "seurat_clusters", pt_alpha = 0.75)
+p
+save_plot(file.path(aligned_dir,"umap_by_clusters.pdf"),
+          p, base_asp = 1.75)
+```
+
+I've generated an excel spreadsheet (found under `markers/markers_per_cluster.xlsx`) with a list of markers for each cluster as a seperate sheet. 
+
+Shown below is dotplot showing the top 5 marker genes for each cluster. 
+
+```{r}
+markers <- read_tsv("markers/per_cluster_markers.tsv")
+topx <- markers %>% 
+  group_by(cluster) %>% 
+  top_n(5, avg_logFC) 
+```
+
+```{r, fig.width = 20, fig.height= 20}
+
+p <- DotPlot(sobj, 
+        features = unique(topx$gene),
+        group.by = "seurat_clusters") +
+  coord_flip() +
+  labs(x = "Cluster",
+       y = "")
+
+p
+
+save_plot(file.path(aligned_dir, "marker_dotplot.pdf"), 
+          p, base_height = 18, base_asp = 1)
+```
+
+```{r}
+
+list_of_markers <- split(markers, markers$cluster)
+names(list_of_markers) <- str_c("cluster_", names(list_of_markers))
+list_of_markers <- map(list_of_markers, 
+                       ~set_xlsx_class(.x, "gene", "Text"))
+
+readme_sheet <- data_frame(
+  Columns = c(
+  "Genes differentially expressed between each cluster and all other cells",
+  "",
+  "Columns",
+  "pval",
+  "avg_logFC",
+  "pct.1",
+  "pct.2",
+  "p_val_adj",
+  "cluster",
+  "gene"
+), Description = c(
+  "",
+  "",
+  "",
+  "p-value from wilcox test of indicated cluster compared to other clusters",
+  "average fold change expressed in natural log",
+  "percent of cells expressing gene (UMI > 0) in cluster",
+  "percent of cell expressing gene (UMI > 0) in all other clusters",
+  "Bonferroni corrected p-value",
+  "cluster name",
+  "gene name"
+))
+readme_sheet <- list(README = readme_sheet)
+names(readme_sheet) <- "README"
+openxlsx::write.xlsx(c(readme_sheet, 
+                       list_of_markers),
+                     "markers/markers_per_cluster.xlsx")
+```
+
+
+### compute number of cells per clusters per UPN
+
+```{r}
+tbl_dir <- "tables"
+x <- dir.create(tbl_dir)
+
+res <- sobj@meta.data %>% 
+  group_by(seurat_clusters, UPN) %>% 
+  summarize(n = n()) %>% 
+  ungroup() %>% 
+  spread(UPN, n, fill = 0L) 
+
+res
+  write_csv(res, file.path(tbl_dir,
+                  "cells_per_cluster_per_sample.csv"))
+
+```
+
+
+```{r}
+tbl_dir <- "tables"
+x <- dir.create(tbl_dir)
+
+res <- sobj@meta.data %>% 
+  group_by(seurat_clusters, UPN) %>% 
+  summarize(n = n()) %>% 
+  ungroup() %>% 
+  spread(UPN, n, fill = 0L) 
+
+res
+  write_csv(res, file.path(tbl_dir,
+                  "cells_per_cluster_per_sample.csv"))
+
+res <- sobj@meta.data %>% 
+    group_by(seurat_clusters, UPN) %>% 
+    summarize(n = n()) %>%
+  group_by(seurat_clusters) %>% 
+  mutate(total = sum(n),
+         percent = 100 * n / total) %>% 
+  ungroup() %>% 
+  select(-n, -total) %>% 
+  spread(UPN, percent, fill = 0L) 
+
+  
+res
+  write_csv(res, file.path(tbl_dir,
+                  "percent_cells_per_cluster_per_sample.csv"))
+
 ```

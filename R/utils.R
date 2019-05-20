@@ -313,3 +313,12 @@ get_distinct_cols <- function(vec, seed = 42) {
   }
   unlist(vals)
 }
+
+
+
+set_xlsx_class <- function(df, col, xlsx_class){
+  for(i in seq_along(col)){
+    class(df[[col[i]]]) <- xlsx_class
+  }
+  df
+}
