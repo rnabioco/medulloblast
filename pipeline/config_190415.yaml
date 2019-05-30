@@ -1,0 +1,29 @@
+# config file for running 10x pipeline 
+
+RAW_DATA:
+    "/beevol/home/riemondy/Projects/sc_repos/vibhakar/data/raw_data/190415_A00405_0091_BHK72CDSXX/"
+
+DATA:
+    "/beevol/home/riemondy/Projects/sc_repos/vibhakar/data/cellranger/"
+
+PROJECT:
+    "vibhakar"
+
+TRANSCRIPTOME:
+    "/beevol/home/riemondy/Projects/shared_dbases/cell_ranger/refdata-cellranger-GRCh38-3.0.0"
+
+SAMPLES:
+    - "1195_3"
+    - "1224_4"
+    - "1235_5"
+    - "1325_7"
+    - "966_2"
+
+
+EXPT_GROUPS:
+    - Foreman_1125,Foreman_1128
+
+LSF_TEMPLATE:
+    "lsf.template"
+
+MAX_10X_JOBS: 24
