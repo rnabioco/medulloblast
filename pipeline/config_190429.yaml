@@ -1,10 +1,10 @@
 # config file for running 10x pipeline 
 
 RAW_DATA:
-    "/beevol/home/riemondy/Projects/sc_repos/vibhakar/data/raw_data/190429_A00405_0098_AHK5KVDSXX/"
+    "/beevol/home/riemondy/Projects/sc_repos/medulloblast/data/raw_data/190429_A00405_0098_AHK5KVDSXX/"
 
 DATA:
-    "/beevol/home/riemondy/Projects/sc_repos/vibhakar/data/cellranger/"
+    "/beevol/home/riemondy/Projects/sc_repos/medulloblast/data/cellranger/"
 
 PROJECT:
     "vibhakar"
