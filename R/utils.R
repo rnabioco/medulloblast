@@ -322,3 +322,80 @@ set_xlsx_class <- function(df, col, xlsx_class){
   }
   df
 }
+
+
+#' Extract out reduced dimensions and cell metadata to tibble
+#'
+#' @param obj Seurat Object
+#' @param embedding dr slot to extract (defaults to all embeddings (2D))
+#'
+get_metadata <- function(obj, embedding = NULL) {
+
+  mdata <- as_tibble(obj@meta.data, rownames = "cell")
+
+  if (!is.null(embedding)) {
+    if (!embedding %in% names(obj@reductions)) {
+      stop(paste0(embedding, " not found in seurat object"), call. = FALSE)
+    }
+
+    embed_dat <- obj@reductions[[embedding]]@cell.embeddings %>%
+      as.data.frame() %>%
+      tibble::rownames_to_column("cell")
+
+  } else {
+    embed_dat <- map(names(obj@reductions),
+                         ~obj@reductions[[.x]]@cell.embeddings[, 1:2]) %>%
+      do.call(cbind, .) %>%
+      as.data.frame() %>%
+      tibble::rownames_to_column("cell")
+
+  }
+
+  embed_dat <- left_join(mdata,
+                         embed_dat,
+                         by = "cell")
+  embed_dat
+}
+
+
+#' plot feature across multiple panels split by group
+plot_features_split <- function(sobj, feature, group = "orig.ident",
+                                embedding = "umap", cols = NULL, add_title = FALSE,
+                                ...) {
+
+  # get max coordinates
+  dim_reduc <- sobj@reductions[[embedding]]@cell.embeddings[, 1:2]
+  x_lims <- c(min(dim_reduc[, 1]), max(dim_reduc[, 1]))
+  y_lims <- c(min(dim_reduc[, 2]), max(dim_reduc[, 2]))
+
+  groups <- sort(unique(sobj@meta.data[[group]]))
+
+  if(!is.null(cols)) {
+     cols <- cols[1:length(groups)]
+     plts <- map2(groups, cols, function(x, y) {
+                cells <- rownames(sobj@meta.data)[sobj@meta.data[[group]] == x]
+                plot_feature(sobj,
+                             feature = feature,
+                             embedding = embedding,
+                             cell_filter = cells,
+                             .cols = y,
+                             ...) +
+                  coord_cartesian(xlim = x_lims, y = y_lims)
+              })
+  } else {
+    plts <- map(groups, function(x) {
+      cells <- rownames(sobj@meta.data)[sobj@meta.data[[group]] == x]
+      plot_feature(sobj,
+                   feature = feature,
+                   embedding = embedding,
+                   cell_filter = cells,
+                   ...) +
+        coord_cartesian(xlim = x_lims, y = y_lims)
+    })
+  }
+
+  if(add_title){
+    plts <- map2(plts, groups, ~.x + labs(title = .y))
+  }
+  plts
+}

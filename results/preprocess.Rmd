@@ -1,7 +1,9 @@
 ---
-title: "single cell basic data rocessing"
+title: "single cell basic data processing"
 author: "Kent Riemondy RBI"
 date: "`R Sys.Date()`"
+params:
+  ncores: 4
 output:
   html_document:
     toc: true
@@ -25,8 +27,9 @@ knitr::opts_chunk$set(cache.lazy = FALSE)
 ```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
 source("../R/utils.R")
 library(future)
-plan(strategy = "multicore", workers = 4)
+message(paste0("using ", params$ncores))
 
+plan("multicore", workers = as.numeric(params$ncores))
 options(future.globals.maxSize = 2 * 1024 ^ 3)
 
 proj_dir <- here()
@@ -39,13 +42,26 @@ mkrs_dir <- "markers"
 
 # Experiment Summary
 
-
 ```{r get_data}
 
 # read in metadata to parse out directories and sample ids
 mdata <- read_excel(file.path(doc_dir, 
                                    "MED scRNAseq batch and annotations 5.8.19.xlsx")) %>% 
-  filter(subgroup != "LGG")
+
+  filter(subgroup != "LGG") %>% 
+  select(-subgroup)
+
+mdata_updated <- read_excel(file.path(doc_dir, 
+                                   "MED scRNAseq batch and annotations no TBD 5.28.19.xlsx")) %>% 
+  rename(subgroup = `subgroup by transcriptomics` , 
+         date = ...7,
+         fq_id = ...8 ) %>% 
+  filter(subgroup != "LGG") %>% 
+  select(UPN, subgroup)
+
+
+mdata <- left_join(mdata_updated, mdata, by = "UPN")
+
 sample_paths <- file.path(data_dir,
                           mdata$fq_id,
                           "outs", 
@@ -55,7 +71,6 @@ names(sample_paths) <- str_replace(mdata$UPN, "_", "-")
 
 mat <- Read10X(sample_paths)
 ```
-
 
 ## General QC for library prep  {.tabset}
 
@@ -212,6 +227,8 @@ for(i in seq_along(per_sample)){
 Suggest removing cells with > 30% mitochondrial UMIs, > 40K UMIs. Consider also dropping samples with median mito UMIs > 30% These libraries would be `1155`, `996`, `1128`, and `898`. Keeping these libraries for now, but should revisit this point. 
 
 ```{r}
+sobj <- readRDS(file.path("objects", "unfiltered.rds"))
+
 sobj <- subset(sobj, subset = percent.mt < 30)
 sobj <- subset(sobj, subset = nCount_RNA < 40000)
 sobj <- subset(sobj, subset = nCount_RNA > 500)
@@ -275,13 +292,40 @@ sobj <- RunUMAP(sobj,
                 dims = 1:40, 
                 min.dist = 0.4, 
                 n.neighbors = 50L,
-                reduction.name = "umap_unmerged",
+                reduction.name = "umap_unaligned",
                 reduction.key = "UMAP_")
+
 ```
+
+## Markers per unaligned cluster
+
+```{r}
+
+sobj <- FindNeighbors(sobj, 
+                      reduction = "pca", 
+                      dims = 1:40, 
+                      n.neighbors = 50L)
+
+sobj <- FindClusters(sobj, resolution = 0.3)
+sobj$clusters_unaligned <- sobj$seurat_clusters
+sobj$seurat_clusters <- NULL
+sobj$RNA_snn_res.0.3 <- NULL
+
+Idents(sobj) <- "clusters_unaligned"
+
+mkrs <- FindAllMarkers(sobj, only.pos = TRUE)
+
+write_tsv(mkrs, 
+          file.path(mkrs_dir, "unaligned_cluster_markers_all_data.tsv"))
+
+
+```
+
 
 ```{r}
 library(harmony)
-sobj <- RunHarmony(sobj, "UPN", plot_convergence = TRUE)
+sobj <- RunHarmony(sobj, "UPN", 
+                   plot_convergence = TRUE)
 sobj <- RunUMAP(sobj, reduction = "harmony", 
                 dims = 1:40, 
                 min.dist = 0.4,
@@ -292,76 +336,105 @@ sobj <- RunUMAP(sobj, reduction = "harmony",
 sobj <- FindNeighbors(sobj, reduction = "harmony", dims = 1:40)
 sobj <- FindClusters(sobj, resolution = 0.3)
 
+sobj$clusters_aligned <- sobj$seurat_clusters
+sobj$seurat_clusters <- NULL
+sobj$RNA_snn_res.0.3 <- NULL
+Idents(clusters_aligned) <- "clusters_aligned"
+
 mkrs <- FindAllMarkers(sobj, only.pos = TRUE)
 
-write_tsv(mkrs, file.path(mkrs_dir, "per_cluster_markers.tsv"))
+write_tsv(mkrs, file.path(mkrs_dir, "aligned_cluster_markers_all_data.tsv"))
 
 ```
 
-## save unmerged object
+
+Write out metadata
+```{r} 
+mdata_out <- get_metadata(sobj)
+outname <- file.path("tables", paste0("metadata_", format(Sys.Date(), "%Y_%m_%d"), ".tsv.gz"))
+write_tsv(mdata_out, outname)
+```
+
+## save merged object
 ```{r}
 saveRDS(sobj, file.path("objects", "sobj.rds"))
-#sobj <- readRDS(file.path("objects", "sobj.rds"))
-```
-
- need to run seurat integration on bodhi, too much memory for the laptop
-
-
-```{r, eval = F}
-sobj_int <- readRDS( "bodhi/sobj_int.rds")
-DefaultAssay(sobj_int) <- "integrated"
-
-sobj_int <- ScaleData(sobj_int)
-
-sobj_int <- RunPCA(sobj_int, 
-                   features = rownames(sobj_int@assays$integrated@data), 
-                   assay = "integrated", npcs = 30, verbose = TRUE)
-
-sobj_int <- RunUMAP(sobj_int, reduction = "pca", dims = 1:40)
-
 ```
 
 
+```{r}
+markers <- read_tsv(file.path(mkrs_dir, "aligned_cluster_markers_all_data.tsv"))
 
-```{r, eval = F}
-#download.file("https://data.broadinstitute.org/Trinity/CTAT/cnv/gencode_v19_gene_pos.txt", "gene_ordering_file.txt")
+list_of_markers <- split(markers, markers$cluster)
+names(list_of_markers) <- str_c("cluster_", names(list_of_markers))
+list_of_markers <- map(list_of_markers, 
+                       ~set_xlsx_class(.x, "gene", "Text"))
 
-ids_to_cell_type <- c(
-  "3" = "macrophage",
-  "14" = "macrophage",
-  "11" = "bcells",
-  "17" = "normal",
-  "22" = "normal", 
-  "18" = "normal",
-  "13" = "normal",
-  "6" = "tcell",
-  "7" = "tcell",
-  "23" = "tcell",
-  "24" = "tcell",
-  "12" = "tcell",
-  "0" = "malignant",
-  "4" = "malignant")
-  
-sobj$id <- ids_to_cell_type[sobj$seurat_clusters]
-sobj$id <- ifelse(is.na(sobj$id), "malignant", sobj$id)
-out <- sobj@meta.data %>% tibble::rownames_to_column("cell") %>% select(cell, id)
-write_tsv(out, "cellAnnotations.txt", col_names = FALSE)
-# create the infercnv object
+readme_sheet <- data_frame(
+  Columns = c(
+  "Genes differentially expressed between each cluster and all other cells",
+  "",
+  "Columns",
+  "pval",
+  "avg_logFC",
+  "pct.1",
+  "pct.2",
+  "p_val_adj",
+  "cluster",
+  "gene"
+), Description = c(
+  "",
+  "",
+  "",
+  "p-value from wilcox test of indicated cluster compared to other clusters",
+  "average fold change expressed in natural log",
+  "percent of cells expressing gene (UMI > 0) in cluster",
+  "percent of cell expressing gene (UMI > 0) in all other clusters",
+  "Bonferroni corrected p-value",
+  "cluster name",
+  "gene name"
+))
+readme_sheet <- list(README = readme_sheet)
+names(readme_sheet) <- "README"
+openxlsx::write.xlsx(c(readme_sheet, 
+                       list_of_markers),
+                     "markers/aligned_cluster_markers.xlsx")
+```
 
-library(infercnv)
-infercnv_obj = CreateInfercnvObject(raw_counts_matrix=sobj@assays$RNA@counts,
-                                    annotations_file="cellAnnotations.txt",
-                                    delim="\t",
-                                    gene_order_file="gene_ordering_file.txt",
-                                    ref_group_names=c("normal", "tcell", "bcells", "macrophage"))
+```{r}
+markers <- read_tsv(file.path(mkrs_dir, "unaligned_cluster_markers_all_data.tsv"))
 
-infercnv_obj = infercnv::run(infercnv_obj,
-                             cutoff=0.1,  # use 1 for smart-seq, 0.1 for 10x-genomics
-                             out_dir="output_dir",  # dir is auto-created for storing outputs
-                             cluster_by_groups=T,   # cluster
-                             denoise=T,
-                             HMM=F
-                             )
+list_of_markers <- split(markers, markers$cluster)
+names(list_of_markers) <- str_c("cluster_", names(list_of_markers))
+list_of_markers <- map(list_of_markers, 
+                       ~set_xlsx_class(.x, "gene", "Text"))
 
-a <- read_tsv("gene_ordering_file.txt")
+readme_sheet <- data_frame(
+  Columns = c(
+  "Genes differentially expressed between each cluster and all other cells",
+  "",
+  "Columns",
+  "pval",
+  "avg_logFC",
+  "pct.1",
+  "pct.2",
+  "p_val_adj",
+  "cluster",
+  "gene"
+), Description = c(
+  "",
+  "",
+  "",
+  "p-value from wilcox test of indicated cluster compared to other clusters",
+  "average fold change expressed in natural log",
+  "percent of cells expressing gene (UMI > 0) in cluster",
+  "percent of cell expressing gene (UMI > 0) in all other clusters",
+  "Bonferroni corrected p-value",
+  "cluster name",
+  "gene name"
+))
+readme_sheet <- list(README = readme_sheet)
+names(readme_sheet) <- "README"
+openxlsx::write.xlsx(c(readme_sheet, 
+                       list_of_markers),
+                     "markers/unaligned_cluster_markers.xlsx")
 ```

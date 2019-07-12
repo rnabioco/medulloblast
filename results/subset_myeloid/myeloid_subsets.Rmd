@@ -1,0 +1,352 @@
+---
+title: "Myeloid subsets"
+author: "Kent Riemondy RBI"
+date: "`r Sys.Date()`"
+params:
+  ncores: 4
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_collapsed: false
+    theme: cosmo
+    highlight: tango
+    fig_caption: true
+    code_folding: hide
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
+source("../../R/utils.R")
+library(future)
+message(paste0("using ", params$ncores))
+
+plan("multicore", workers = as.numeric(params$ncores))
+options(future.globals.maxSize = 2 * 1024 ^ 3)
+
+proj_dir <- here()
+data_dir <- file.path(proj_dir, "data", "cellranger", "results")
+doc_dir <- file.path(proj_dir, "docs")
+
+fig_dir <- "figs"
+mkrs_dir <- "markers"
+objects_dir <- "objects"
+tables_dir <- "tables"
+walk(c(fig_dir,mkrs_dir, objects_dir, tables_dir), 
+     dir.create, showWarnings = F)
+```
+
+```{r get_data}
+sobj <- readRDS(file.path("..", "objects", "immune_sobj.rds"))
+```
+
+```{r, fig.width = 12, fig.height = 12}
+
+myeloid_cells <- colnames(sobj)[sobj$RNA_snn_res.0.05 %in% c(0, 5)]
+
+sobj <- sobj[, myeloid_cells]
+
+sobj@reductions$umap_merged <- NULL
+sobj@reductions$umap <- NULL
+
+sobj <- FindVariableFeatures(sobj, 
+                             selection.method = "vst", 
+                             nfeatures = 3000, 
+                             verbose = FALSE)
+
+sobj <- ScaleData(sobj, 
+                  vars.to.regress = c("percent.mt", "nCount_RNA"), 
+                  verbose = TRUE)
+
+sobj <- RunPCA(sobj, 
+               npcs = 40, 
+               verbose = FALSE)
+
+sobj <- RunUMAP(sobj, 
+                reduction = "pca", 
+                dims = 1:40, 
+                min.dist = 0.3, 
+                n.neighbors = 30L,
+                reduction.name = "umap_unaligned",
+                reduction.key = "UMAP_unaligned_")
+
+sobj <- FindNeighbors(sobj,
+                      reduction = "pca",
+                      dims = 1:40,
+                      k.param = 30)
+
+sobj <- FindClusters(sobj, 
+                     resolution = c(0.3, 0.1, 0.05, 
+                                    0.02, .01, 0.0075, 
+                                    0.005))
+
+outdir <- "figs/unaligned"
+dir.create(outdir, showWarnings = FALSE)
+
+plts <- map(str_subset(colnames(sobj@meta.data), "RNA_snn"), 
+            ~plot_feature(sobj, .x, embedding = "umap_unaligned") + 
+              labs(title = .x))
+
+p_1 <- plot_feature(sobj, "subgroup", embedding = "umap_unaligned") +
+  labs(title = "Subgroup")
+
+plts <- c(plts, list(p_1))
+
+plt <- plot_grid(plotlist = plts, nrow = 3, ncol = 3)
+save_plot(file.path(outdir, "umaps_by_resolution.pdf"), 
+          plt, 
+          nrow = 3, ncol = 3)
+
+
+plts <- map(c("subgroup", "UPN"),
+    ~plot_feature(sobj, .x, embedding = "umap_unaligned"))
+
+plt <- plot_grid(plotlist = plts, nrow = 1, ncol = 2)
+save_plot(file.path(outdir, "umaps_by_class.pdf"), 
+          plt, 
+          nrow = 1, ncol = 2)
+
+
+sobj$clusters_unaligned <- sobj$RNA_snn_res.0.3
+```
+
+## harmonize
+
+```{r, eval = FALSE}
+library(harmony)
+
+sobj <- RunHarmony(sobj, "UPN", 
+                   plot_convergence = TRUE)
+
+sobj <- RunUMAP(sobj, 
+                reduction = "harmony", 
+                dims = 1:40, 
+                min.dist = 0.3, 
+                n.neighbors = 30L,
+                reduction.name = "umap_aligned",
+                reduction.key = "UMAP_aligned_")
+
+
+sobj <- FindNeighbors(sobj, reduction = "harmony", 
+                      dims = 1:40, k.param = 30L)
+
+sobj <- FindClusters(sobj, 
+                     resolution = c(0.3, 0.1, 0.05, 
+                                    0.02, .01, 0.0075, 
+                                    0.005))
+
+plot_feature(sobj, "subgroup", embedding = "umap_aligned")
+plot_feature(sobj, "UPN", embedding = "umap_aligned")
+plot_feature(sobj, "seurat_clusters", embedding = "umap_aligned")
+
+outdir <- "figs/aligned"
+dir.create(outdir, showWarnings = FALSE)
+
+plts <- map(str_subset(colnames(sobj@meta.data), "RNA_snn"), 
+            ~plot_feature(sobj, .x, embedding = "umap_aligned") + 
+              labs(title = .x))
+
+p_1 <- plot_feature(sobj, "subgroup", embedding = "umap_aligned") +
+  labs(title = "Subgroup")
+
+plts <- c(plts, list(p_1))
+
+plt <- plot_grid(plotlist = plts, nrow = 3, ncol = 3)
+save_plot(file.path(outdir, "umaps_by_resolution.pdf"), 
+          plt, 
+          nrow = 3, ncol = 3)
+
+
+plts <- map(c("subgroup", "UPN"),
+    ~plot_feature(sobj, .x, embedding = "umap_aligned"))
+
+plt <- plot_grid(plotlist = plts, nrow = 1, ncol = 2)
+save_plot(file.path(outdir, "umaps_by_class.pdf"), 
+          plt, 
+          nrow = 1, ncol = 2)
+
+
+sobj$clusters_aligned <- sobj$RNA_snn_res.0.05
+```
+
+Write out metadata
+
+```{r} 
+mdata_out <- get_metadata(sobj)
+outname <- file.path("tables", paste0("myeloid_metadata_", format(Sys.Date(), "%Y_%m_%d"), ".tsv.gz"))
+write_tsv(mdata_out, outname)
+```
+
+## save object
+
+```{r}
+saveRDS(sobj, file.path("objects", "myeloid_sobj.rds"))
+```
+
+## markers
+
+```{r}
+sobj <- readRDS(file.path("objects", "myeloid_sobj.rds"))
+Idents(sobj) <- "clusters_unaligned"
+
+mkrs <- FindAllMarkers(sobj, only.pos = TRUE)
+
+write_tsv(mkrs, file.path(mkrs_dir, "res_0.05_unaligned_myeloid_cluster_markers.tsv"))
+```
+
+```{r}
+markers <- read_tsv(file.path(mkrs_dir, "res_0.05_unaligned_myeloid_cluster_markers.tsv"))
+
+list_of_markers <- split(markers, markers$cluster)
+names(list_of_markers) <- str_c("cluster_", names(list_of_markers))
+list_of_markers <- map(list_of_markers, 
+                       ~set_xlsx_class(.x, "gene", "Text"))
+
+readme_sheet <- data_frame(
+  Columns = c(
+  "Genes differentially expressed between each cluster and all other cells",
+  "",
+  "Columns",
+  "pval",
+  "avg_logFC",
+  "pct.1",
+  "pct.2",
+  "p_val_adj",
+  "cluster",
+  "gene"
+), Description = c(
+  "",
+  "",
+  "",
+  "p-value from wilcox test of indicated cluster compared to other clusters",
+  "average fold change expressed in natural log",
+  "percent of cells expressing gene (UMI > 0) in cluster",
+  "percent of cell expressing gene (UMI > 0) in all other clusters",
+  "Bonferroni corrected p-value",
+  "cluster name",
+  "gene name"
+))
+readme_sheet <- list(README = readme_sheet)
+names(readme_sheet) <- "README"
+openxlsx::write.xlsx(c(readme_sheet, 
+                       list_of_markers),
+                     "markers/myeloid_cluster_markers_unaligned.xlsx")
+
+```
+
+## Cell browser
+
+```{r}
+sobj <- readRDS(file.path("objects", "myeloid_sobj.rds"))
+dir.create("cellbrowser", recursive = TRUE)
+```
+
+Simplify object metadata to make interpretable
+
+```{r}
+cols <- colnames(sobj@meta.data)
+cols_to_keep <- c(
+  `genes per cell` = "nFeature_RNA",
+  `UMIs per cell` = "nCount_RNA",
+  `percent of UMIs as mitochondria` = "percent.mt",
+ # `clusters_aligned` = "clusters_aligned",
+  `clusters_unaligned` = "clusters_unaligned",
+  `subtype` = "subgroup",
+  `Dx` = "Dx",
+  `UPN` = "UPN",
+  cell_type = "cell_type",
+  cell_phenotype = "cell_phenotype")
+sobj@meta.data <- sobj@meta.data[, cols_to_keep]
+colnames(sobj@meta.data) <- names(cols_to_keep)
+Idents(sobj) <- "clusters"
+
+```
+
+
+## Set colors
+
+```{r}
+## default palette (see ../../R/globals.R)
+col_palette <- discrete_palette_default
+
+## summarize per cluster annotations
+to_map <- c("clusters_unaligned",
+           # "clusters_aligned",
+            "subtype",
+            "UPN",
+            "cell_type",
+            "cell_phenotype")
+col_map <- as.list(sobj@meta.data[, to_map]) %>%
+      map(~as.character(unique(.x)))
+
+res <- list()
+
+tmp <- col_palette[1:length(col_map$clusters_unaligned)]
+names(tmp) <- col_map$clusters_unaligned
+res$clusters_unaligned <- tmp 
+# 
+# tmp <- col_palette[1:length(col_map$clusters_aligned)]
+# names(tmp) <- col_map$clusters_aligned
+# res$clusters_aligned <- tmp 
+
+tmp <- col_palette[1:length(col_map$UPN)]
+names(tmp) <- col_map$UPN
+res$UPN <- tmp 
+  
+tmp <- col_palette[1:length(col_map$subtype)]
+names(tmp) <- col_map$subtype
+res$subtype <- tmp 
+
+tmp <- col_palette[1:length(col_map$cell_type)]
+names(tmp) <- col_map$cell_type
+res$cell_type <- tmp 
+
+tmp <- col_palette[1:length(col_map$cell_phenotype)]
+names(tmp) <- col_map$cell_phenotype
+res$cell_phenotype <- tmp 
+
+
+map_dfr(res, 
+        ~tibble(clusterName = names(.x), 
+                color = .x)) %>% 
+  as.data.frame() %>% 
+  write_csv("cellbrowser/myeloid_colorMap.csv", col_names = F, quote_escape = "none")
+
+```
+
+
+Build cellbrowser objects. Note requires UCSC (`cellbrowser python package`[ https://cellbrowser.readthedocs.io/index.html])
+
+```{r}
+dir.create("cellbrowser/markers", recursive = TRUE)
+cols <- colnames(sobj@meta.data)
+names(cols) <- colnames(sobj@meta.data)
+mkrs <- read_tsv("markers/res_0.05_unaligned_myeloid_cluster_markers.tsv") %>% 
+  select(cluster, gene, p_val_adj, everything())
+
+write_tsv(mkrs, "cellbrowser/markers/myeloid_cluster_markers.tsv")
+
+do.call(function(...) {ExportToCellbrowser(sobj, 
+                    dir = file.path("cellbrowser",
+                                    "medulloblastoma_myeloid"),
+                    dataset.name = "medulloblastoma_myeloid",
+                    #reductions = c("umap_unaligned", "umap_aligned"),
+                    reductions = c("umap_unaligned"),
+                    markers.file = "cellbrowser/markers/myeloid_cluster_markers.tsv",
+                    cluster.field = "clusters_unaligned",
+                    skip.expr.matrix = FALSE,
+                    ...)}, 
+        as.list(cols))
+
+```
+
+
+
+```{bash}
+cd cellbrowser
+echo -e '\ncolors="/Users/kriemo/Projects/sc_repos/medulloblast/results/subset_myeloid/cellbrowser/myeloid_colorMap.csv"' >> medulloblastoma_myeloid/cellbrowser.conf
+```

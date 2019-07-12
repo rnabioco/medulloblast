@@ -1,0 +1,498 @@
+---
+title: "Mouse model figures"
+author: "Kent Riemondy RBI"
+date: "7/2/2019"
+output:  
+  html_document:
+    toc: true
+    toc_float: true
+    toc_collapsed: false
+    theme: cosmo
+    highlight: tango
+    fig_caption: true
+    code_folding: hide
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(cache = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(cache.lazy = FALSE)
+```
+
+
+```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
+source("../../R/utils.R")
+library(future)
+plan(strategy = "multicore", workers = 4)
+
+options(future.globals.maxSize = 2 * 1024 ^ 3)
+
+proj_dir <- here()
+data_dir <- file.path(proj_dir, "data", "cellranger", "results")
+doc_dir <- file.path(proj_dir, "docs")
+
+fig_dir <- "figs"
+mkrs_dir <- "markers"
+walk(c(fig_dir,mkrs_dir, "tables"), dir.create, showWarnings = F)
+```
+
+# Experiment Summary
+
+
+```{r get_data}
+samples <- c(
+  "MED9_1",
+  "MED11_2",
+  "MED21_3"
+)
+
+sobj <- readRDS(file.path("objects", "unfiltered.rds"))
+```
+
+
+## General QC for library prep  {.tabset}
+
+```{r }
+
+metrics_paths <- file.path(data_dir,
+                          samples,
+                          "outs", 
+                          "metrics_summary.csv")
+
+names(metrics_paths) <- samples
+
+mapping_dat <- map_dfr(metrics_paths, read_csv, .id = "sample")
+
+clean_up_metadata <- function(metrics_summary) {
+  metrics_summary <- mutate_all(metrics_summary, str_remove, "%$")
+  metrics_summary <- mutate_at(metrics_summary, .vars= 2:ncol(metrics_summary), as.numeric)
+  metrics_summary
+}
+
+mapping_dat <- clean_up_metadata(mapping_dat)
+
+metrics <- colnames(mapping_dat)[2:ncol(mapping_dat)]
+
+mapping_dat <- mapping_dat %>% 
+  gather(metric, value, -sample) %>% 
+  mutate(sample = factor(sample, levels = unique(sample)))
+
+p <- map(metrics, 
+    function(x) {
+    filter(mapping_dat, metric == x) %>% 
+          ggplot(aes(sample, value)) +
+            geom_point(aes(color = sample)) +
+        scale_color_brewer(palette = "Paired") + 
+        labs(y = x, 
+             x = "") +
+        theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+}) 
+```
+
+```{r, results ='asis'}
+
+for(i in seq_along(p)){
+  cat('\n### ', metrics[i], '\n')
+  print(p[i])
+  cat('\n')
+}
+```
+
+
+
+
+### Percent Mitochondrial UMIs 
+
+```{r}
+plot_violin(sobj@meta.data, "orig.ident", "percent.mt", .fill = "orig.ident") +
+  labs(x = "", y = "Percent UMIs from Mitochondria")
+```
+
+
+### # of genes detected 
+
+```{r}
+plot_violin(sobj@meta.data, "orig.ident", "nFeature_RNA", .fill = "orig.ident") +
+  labs(x = "", y = "# of genes per cell")
+```
+
+
+### # of UMIs detected
+
+```{r}
+plot_violin(sobj@meta.data, "orig.ident", "nCount_RNA", .fill = "orig.ident") +
+  labs(x = "", y = "# of UMIs") 
+```
+
+### Table of mitochondrial proportions per sample
+
+```{r}
+sobj@meta.data %>% 
+  group_by(UPN) %>% 
+  summarize(median_percent_mito = median(percent.mt), 
+            mean_percent_mito = mean(percent.mt)) %>% 
+  arrange(desc(median_percent_mito))
+
+```
+
+
+## Relationship between UMIs and % mitochondria {.tabset}
+
+### All samples
+```{r, fig.width = 12, fig.height = 8}
+sample_names <- as.character(unique(sobj@meta.data$orig.ident))
+per_sample <- map(sample_names, ~filter(sobj@meta.data, 
+                                        orig.ident == .x))
+p <- list()
+for(i in seq_along(per_sample)){
+  .col <- discrete_palette_default[i]
+  p[[i]] <- ggplot(per_sample[[i]], aes(nCount_RNA, percent.mt)) +
+        geom_point(aes(color = UPN)) +
+        scale_color_manual(values = .col)
+}
+
+plot_grid(plotlist= p, nrow = 1, ncol = 3)
+```
+
+```{r, results ='asis'}
+
+
+
+# generate tab with individual plot programmatically 
+# see https://stackoverflow.com/questions/43752095/programmatically-insert-header-and-plot-in-same-code-chunk-with-r-markdown-using?noredirect=1&lq=1
+
+for(i in seq_along(per_sample)){
+  .col <- discrete_palette_default[i]
+  cat('\n### ', sample_names[i], '\n')
+  p <- ggplot(per_sample[[i]], aes(nCount_RNA, percent.mt)) +
+        geom_point(aes(color = UPN)) +
+        scale_color_manual(values = .col)
+  print(p)
+  cat('\n')
+}
+```
+
+
+## Filter cells and samples.
+
+Suggest removing cells with > 20% mitochondrial UMIs. 
+```{r}
+
+sobj <- readRDS(file.path("objects", "sobj.rds"))
+
+# reasign cluster factor levels, not sure why these are missing. 
+
+sobj$clusters <- as.factor(as.numeric(sobj$clusters))
+sobj$clusters_noregress <- as.factor(as.numeric(sobj$clusters_noregress))
+```
+
+```{r, ncells_post_filtering, fig.caption = "Number of cells per sample remaining after filtering"}
+group_by(sobj@meta.data, orig.ident) %>%
+  summarize(n_cells = n())
+```
+
+## Normalize and embed into 2D with UMAP
+
+```{r}
+unaligned_dir <- file.path(fig_dir, "no_regress")
+dir.create(unaligned_dir, showWarnings = F)
+```
+
+### By sample
+```{r}
+p <- plot_feature(sobj, 
+                  "orig.ident", 
+                  pt_alpha = 0.50, 
+                  embedding = "umap_noregress")
+p
+save_plot(file.path(unaligned_dir,"umap_by_sample.pdf"), p, base_asp = 1.75)
+```
+
+### By sample split
+
+```{r}
+plts <- list()
+plts[[1]] <- plot_feature(sobj, "orig.ident", embedding = "umap_noregress") + 
+  labs(title = "All samples")
+plts[2:4] <- plot_features_split(sobj, "orig.ident", "orig.ident", embedding = "umap_noregress", add_title = TRUE, cols = discrete_palette_default)
+
+p <- plot_grid(plotlist = plts, nrow = 2, ncol = 2)
+p
+
+save_plot(file.path(unaligned_dir,"umap_by_sample_split.pdf"), p, base_asp = 1.75,
+          nrow = 2, 
+          ncol = 2)
+```
+
+### Number of UMIs
+
+```{r}
+p <- plot_feature(sobj, "nCount_RNA", embedding = "umap_noregress")
+p
+save_plot(file.path(unaligned_dir,"umap_by_nUMI.pdf"), p, base_asp = 1.75)
+```
+
+### Percent Mitochondria
+
+```{r}
+p <- plot_feature(sobj, "percent.mt", embedding = "umap_noregress")
+p
+save_plot(file.path(unaligned_dir,"umap_by_pt_mitochondria.pdf"), p, base_asp = 1.75)
+```
+
+### Cell cycle 
+
+```{r, fig.width = 12, fig.height=8}
+cc_scores <- c(
+  "Pola1",
+  "Mcm2",
+  "Mki67",
+  "Phase",
+  "S.Score",
+  "G2M.Score"
+)
+
+plts <- map(cc_scores, ~plot_feature(sobj, .x, embedding = "umap_noregress"))
+plt <- plot_grid(plotlist = plts, nrow = 2,
+                 ncol = 3)
+plt
+
+save_plot(file.path(unaligned_dir,
+                    "umap_by_cellcycle.pdf"), 
+          plt, 
+          base_asp = 1.75,
+          nrow = 2, ncol = 3)
+```
+
+## Regress out cell cycle and reembed into 2D with UMAP {.tabset}
+
+The largest cluster shows clear segreation based on cell cycle phase. Next regress out cell cycle and rerun UMAP and clustering.
+
+```{r}
+aligned_dir <- file.path(fig_dir, "regressed")
+dir.create(aligned_dir, showWarnings = F)
+```
+
+
+### By sample
+```{r}
+p <- plot_umap(sobj, "orig.ident", pt_alpha = 0.75)
+p
+save_plot(file.path(aligned_dir,"umap_by_sample.pdf"), 
+          p, 
+          base_asp = 1.75)
+```
+
+
+### By sample split
+
+```{r}
+plts <- list()
+plts[[1]] <- plot_feature(sobj, "orig.ident", embedding = "umap") + 
+  labs(title = "All samples")
+plts[2:4] <- plot_features_split(sobj, "orig.ident", "orig.ident", embedding = "umap", add_title = TRUE, cols = discrete_palette_default)
+
+p <- plot_grid(plotlist = plts, nrow = 2, ncol = 2)
+p
+
+save_plot(file.path(aligned_dir,"umap_by_sample_split.pdf"), p, 
+          base_asp = 1.75,
+          nrow = 2, 
+          ncol = 2)
+```
+
+### Number of UMIs
+
+
+```{r}
+p <- plot_umap(sobj, "nCount_RNA", pt_alpha = 0.75)
+p
+save_plot(file.path(aligned_dir,"umap_by_nUMI.pdf"), p, base_asp = 1.75)
+```
+
+###  Percent UMIs
+
+
+```{r}
+p <- plot_umap(sobj, "percent.mt", pt_alpha = 0.75)
+p
+save_plot(file.path(aligned_dir,"umap_by_pt_mitochondria.pdf"), p, base_asp = 1.75)
+```
+
+### Cell cycle 
+
+```{r, fig.width = 12, fig.height=8}
+cc_scores <- c(
+  "Pola1",
+  "Mcm2",
+  "Mki67",
+  "Phase",
+  "S.Score",
+  "G2M.Score"
+)
+
+plts <- map(cc_scores, ~plot_feature(sobj, .x, embedding = "umap"))
+plt <- plot_grid(plotlist = plts, nrow = 2,
+                 ncol = 3)
+plt
+
+save_plot(file.path(unaligned_dir,
+                    "umap_by_cellcycle.pdf"), 
+          plt, 
+          base_asp = 1.75,
+          nrow = 2, ncol = 3)
+```
+
+## Clustering and finding markers per cluster 
+
+Next I've done clustering to try to identify cell types. 
+
+
+```{r}
+
+plts <- list()
+plts[[1]] <- plot_feature(sobj, "clusters", embedding = "umap") + 
+  labs(title = "All samples")
+plts[2:4] <- plot_features_split(sobj, "clusters", "orig.ident", embedding = "umap", add_title = TRUE)
+
+p <- plot_grid(plotlist = plts, nrow = 2, ncol = 2)
+p
+
+save_plot(file.path(aligned_dir,"umap_by_clusters.pdf"), p, 
+          base_asp = 1.75,
+          nrow = 2, 
+          ncol = 2)
+
+```
+
+I've generated an excel spreadsheet (found under `markers/markers_per_cluster.xlsx`) with a list of markers for each cluster as a seperate sheet. 
+
+Shown below is dotplot showing the top 5 marker genes for each cluster. 
+
+```{r}
+markers <- read_tsv("markers/per_cluster_markers_ccregress.tsv")
+topx <- markers %>% 
+  group_by(cluster) %>% 
+  top_n(10, avg_logFC) 
+```
+
+```{r, fig.width = 8, fig.height= 8}
+
+p <- DotPlot(sobj, 
+        features = unique(topx$gene),
+        group.by = "clusters") +
+  coord_flip() +
+  labs(x = "Cluster",
+       y = "")
+
+p
+
+save_plot(file.path(aligned_dir, "marker_dotplot.pdf"), 
+          p, base_height = 18, base_asp = 1)
+```
+
+```{r}
+
+list_of_markers <- split(markers, markers$cluster)
+names(list_of_markers) <- str_c("cluster_", names(list_of_markers))
+list_of_markers <- map(list_of_markers, 
+                       ~set_xlsx_class(.x, "gene", "Text"))
+
+readme_sheet <- data_frame(
+  Columns = c(
+  "Genes differentially expressed between each cluster and all other cells",
+  "",
+  "Columns",
+  "pval",
+  "avg_logFC",
+  "pct.1",
+  "pct.2",
+  "p_val_adj",
+  "cluster",
+  "gene"
+), Description = c(
+  "",
+  "",
+  "",
+  "p-value from wilcox test of indicated cluster compared to other clusters",
+  "average fold change expressed in natural log",
+  "percent of cells expressing gene (UMI > 0) in cluster",
+  "percent of cell expressing gene (UMI > 0) in all other clusters",
+  "Bonferroni corrected p-value",
+  "cluster name",
+  "gene name"
+))
+readme_sheet <- list(README = readme_sheet)
+names(readme_sheet) <- "README"
+openxlsx::write.xlsx(c(readme_sheet, 
+                       list_of_markers),
+                     "markers/markers_per_cluster_ccregress.xlsx")
+```
+
+
+### compute number of cells per clusters per UPN
+
+```{r}
+tbl_dir <- "tables"
+x <- dir.create(tbl_dir)
+
+res <- sobj@meta.data %>% 
+  group_by(clusters, UPN) %>% 
+  summarize(n = n()) %>% 
+  ungroup() %>% 
+  spread(UPN, n, fill = 0L) 
+
+res
+  write_csv(res, file.path(tbl_dir,
+                  "cells_per_cluster_per_sample.csv"))
+
+res <- sobj@meta.data %>% 
+    group_by(clusters, orig.ident) %>% 
+    summarize(n = n()) %>%
+  group_by(clusters) %>% 
+  mutate(total = sum(n),
+         percent = 100 * n / total) %>% 
+  ungroup() %>% 
+  select(-n, -total) %>% 
+  spread(orig.ident, percent, fill = 0L) 
+
+  
+res
+  write_csv(res, file.path(tbl_dir,
+                  "percent_cells_per_cluster_per_sample.csv"))
+
+```
+
+
+```{r, fig.width = 8, fig.height = 16}
+library(clustifyr)
+library(ComplexHeatmap)
+tm_average <- readRDS("/Users/kriemo/Projects/sc_repos/vanotterloo/data/tabula_muris/TM_avg_expr.rds")
+
+mdata <- get_metadata(sobj)
+
+res <- clustify(sobj@assays$RNA@data, 
+                tm_average, 
+                query_genes = sobj@assays$RNA@var.features,
+                metadata = mdata, 
+                cluster_col = "clusters", 
+                compute_method = "spearman")
+
+hmap <- Heatmap(t(res), 
+                viridis::viridis(256), 
+                "Spearman\ncorrelation",
+                row_title = "Cell types from Tabula Muris",
+                column_title = "Clusters")
+
+pdf("figs/regressed/tm_heatmap.pdf")
+print(hmap)
+dev.off()
+hmap
+
+plot_umap(sobj, "tabula_muris_cell_type")
+```
+
+
+

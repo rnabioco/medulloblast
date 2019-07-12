@@ -10,3 +10,9 @@
 *.html
 *.txt
 *.loom
+*.gz
+*.html
+*.png
+*.err
+*.out
+*.swp

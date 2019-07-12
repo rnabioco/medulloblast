@@ -40,7 +40,20 @@ walk(c(fig_dir,mkrs_dir), dir.create, showWarnings = F)
 # read in metadata to parse out directories and sample ids
 mdata <- read_excel(file.path(doc_dir, 
                                    "MED scRNAseq batch and annotations 5.8.19.xlsx")) %>% 
-  filter(subgroup != "LGG")
+
+  filter(subgroup != "LGG") %>% 
+  select(-subgroup)
+
+mdata_updated <- read_excel(file.path(doc_dir, 
+                                   "MED scRNAseq batch and annotations no TBD 5.28.19.xlsx")) %>% 
+  rename(subgroup = `subgroup by transcriptomics` , 
+         date = ...7,
+         fq_id = ...8 ) %>% 
+  filter(subgroup != "LGG") %>% 
+  select(UPN, subgroup)
+
+
+mdata <- left_join(mdata_updated, mdata, by = "UPN")
 
 sobj <- readRDS(file.path("objects", "unfiltered.rds"))
 ```
@@ -57,23 +70,27 @@ subgroup_order <- c(
   "SHH",
   "GP3",
   "GP3/4",
-  "GP4",
-  "TBD"
+  "GP4"
 )
 
-annots <- mutate(annots, subgroup = factor(subgroup, levels = subgroup_order))
+annots <- mutate(annots, 
+                 subgroup = factor(subgroup, 
+                                   levels = subgroup_order))
 
-annots <- annots %>% arrange(subgroup, as.numeric(UPN))
+annots <- annots %>% 
+  arrange(subgroup, as.numeric(UPN))
 
 sample_order <- annots$UPN 
 
-sobj@meta.data$UPN <- factor(sobj@meta.data$UPN, levels = sample_order)
-sobj@meta.data$subgroup <- factor(sobj@meta.data$subgroup, levels = subgroup_order)
+sobj@meta.data$UPN <- factor(sobj@meta.data$UPN, 
+                             levels = sample_order)
+sobj@meta.data$subgroup <- factor(sobj@meta.data$subgroup, 
+                                  levels = subgroup_order)
 
 
 # per sample cols
-col_pal <- get_distinct_cols(annots$subgroup)
-names(col_pal) <- annots$UPN
+#col_pal <- get_distinct_cols(as.character(annots$subgroup))
+#names(col_pal) <- annots$UPN
 ```
 
 ## General library statistics  {.tabset}
@@ -323,7 +340,7 @@ p
 save_plot(file.path(unaligned_dir,"umap_by_nUMI.pdf"), p, base_asp = 1.75)
 ```
 
-### Percent UMIs
+### Percent Mitochondria
 
 ```{r}
 p <- plot_feature(sobj, "percent.mt", embedding = "umap_unmerged")
@@ -408,7 +425,7 @@ Next I've done some preliminary clustering to try to identify cell types.
 
 
 ```{r}
-p <- plot_umap(sobj, "seurat_clusters", pt_alpha = 0.75)
+p <- plot_umap(sobj, "clusters_aligned", pt_alpha = 0.75)
 p
 save_plot(file.path(aligned_dir,"umap_by_clusters.pdf"),
           p, base_asp = 1.75)
@@ -419,7 +436,7 @@ I've generated an excel spreadsheet (found under `markers/markers_per_cluster.xl
 Shown below is dotplot showing the top 5 marker genes for each cluster. 
 
 ```{r}
-markers <- read_tsv("markers/per_cluster_markers.tsv")
+markers <- read_tsv(file.path(mkrs_dir, "aligned_cluster_markers_all_data.tsv"))
 topx <- markers %>% 
   group_by(cluster) %>% 
   top_n(5, avg_logFC) 
@@ -429,7 +446,7 @@ topx <- markers %>%
 
 p <- DotPlot(sobj, 
         features = unique(topx$gene),
-        group.by = "seurat_clusters") +
+        group.by = "clusters_aligned") +
   coord_flip() +
   labs(x = "Cluster",
        y = "")
@@ -440,43 +457,7 @@ save_plot(file.path(aligned_dir, "marker_dotplot.pdf"),
           p, base_height = 18, base_asp = 1)
 ```
 
-```{r}
 
-list_of_markers <- split(markers, markers$cluster)
-names(list_of_markers) <- str_c("cluster_", names(list_of_markers))
-list_of_markers <- map(list_of_markers, 
-                       ~set_xlsx_class(.x, "gene", "Text"))
-
-readme_sheet <- data_frame(
-  Columns = c(
-  "Genes differentially expressed between each cluster and all other cells",
-  "",
-  "Columns",
-  "pval",
-  "avg_logFC",
-  "pct.1",
-  "pct.2",
-  "p_val_adj",
-  "cluster",
-  "gene"
-), Description = c(
-  "",
-  "",
-  "",
-  "p-value from wilcox test of indicated cluster compared to other clusters",
-  "average fold change expressed in natural log",
-  "percent of cells expressing gene (UMI > 0) in cluster",
-  "percent of cell expressing gene (UMI > 0) in all other clusters",
-  "Bonferroni corrected p-value",
-  "cluster name",
-  "gene name"
-))
-readme_sheet <- list(README = readme_sheet)
-names(readme_sheet) <- "README"
-openxlsx::write.xlsx(c(readme_sheet, 
-                       list_of_markers),
-                     "markers/markers_per_cluster.xlsx")
-```
 
 
 ### compute number of cells per clusters per UPN
@@ -486,7 +467,7 @@ tbl_dir <- "tables"
 x <- dir.create(tbl_dir)
 
 res <- sobj@meta.data %>% 
-  group_by(seurat_clusters, UPN) %>% 
+  group_by(clusters_aligned, UPN) %>% 
   summarize(n = n()) %>% 
   ungroup() %>% 
   spread(UPN, n, fill = 0L) 
@@ -503,7 +484,7 @@ tbl_dir <- "tables"
 x <- dir.create(tbl_dir)
 
 res <- sobj@meta.data %>% 
-  group_by(seurat_clusters, UPN) %>% 
+  group_by(clusters_aligned, UPN) %>% 
   summarize(n = n()) %>% 
   ungroup() %>% 
   spread(UPN, n, fill = 0L) 
@@ -513,9 +494,9 @@ res
                   "cells_per_cluster_per_sample.csv"))
 
 res <- sobj@meta.data %>% 
-    group_by(seurat_clusters, UPN) %>% 
+    group_by(clusters_aligned, UPN) %>% 
     summarize(n = n()) %>%
-  group_by(seurat_clusters) %>% 
+  group_by(clusters_aligned) %>% 
   mutate(total = sum(n),
          percent = 100 * n / total) %>% 
   ungroup() %>% 
@@ -528,3 +509,101 @@ res
                   "percent_cells_per_cluster_per_sample.csv"))
 
 ```
+
+
+
+## Annotate cell types
+
+Using Human primary cell atlas https://www.ncbi.nlm.nih.gov/pubmed/24053356
+
+
+```{r, fig.height=20, fig.width=8}
+library(clustifyr)
+hpca_ref <- readRDS("extdata/human_primary_cell_atlas.rds")
+
+
+res <- clustify(
+  sobj,
+  hpca_ref, 
+  cluster_col = "clusters_aligned",
+  query_genes = sobj@assays$RNA@var.features,
+  seurat_out = FALSE
+)
+
+library(ComplexHeatmap)
+
+hmap <- Heatmap(t(res), 
+                viridis::viridis(256), 
+                "Spearman\ncorrelation",
+                row_title = "Cell types from HCPA",
+                column_title = "Clusters")
+hmap
+
+pdf("figs/aligned/hmap_hpca.pdf", width = 8, height = 20)
+print(hmap)
+dev.off()
+```
+
+
+Based on Andy's and my analysis cells will be annotated
+
+```{r}
+
+cell_type <- c(
+  "17" = "WNT subtype",
+  "15" = "WNT outlier_1",
+  "16" = "WNT outlier_2",
+  "6" = "SHH subtype",
+  "4" = "SHH>>GP3>GP4",
+"11" = "GP3>>>>GP4",
+"7"	= "GP3>>GP4",
+"8"	= "GP3>>GP4",
+"2"	= "GP3>GP4",
+"0"	= "GP4>>GP3",
+"1" = "GP4>>GP3",
+"14" = "GP4>>GP3",
+"18" = "GP3>>GP4",
+"13" = "GP4>>>GP3",
+"5" = "T-cells",
+"3" = "macrophage_monocytes_major",
+"12" = "macrophage_monocytes_minor",
+"9" = "B-cells",
+"10" = "Astrocytes",
+"19" = "Oligodendrocytes")
+
+
+cell_phenotype <- c(
+    "17" = "Neoplastic",
+  "15" = "Neoplastic",
+  "16" = "Neoplastic",
+  "6" = "Neoplastic",
+  "4" = "Neoplastic",
+"11" = "Neoplastic",
+"7"	= "Neoplastic",
+"8"	= "Neoplastic",
+"2"	= "Neoplastic",
+"0"	= "Neoplastic",
+"1" = "Neoplastic",
+"14" = "Neoplastic",
+"18" = "Neoplastic",
+"13" = "Neoplastic",
+"5" = "Immune",
+"3" = "Immune",
+"12" = "Immune",
+"9" = "Immune",
+"10" = "Normal",
+"19" = "Normal"
+)
+
+
+sobj$cell_type <- cell_type[as.character(sobj$clusters_aligned)]
+sobj$cell_phenotype <- cell_phenotype[as.character(sobj$clusters_aligned)]
+```
+
+
+resave object
+```{r}
+saveRDS(sobj, file.path("objects", "sobj.rds"))
+```
+
+

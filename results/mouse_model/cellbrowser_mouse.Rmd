@@ -1,0 +1,145 @@
+---
+title: "Format mouse UCSC cellbrowser"
+author: "Kent Riemondy RBI"
+date: "5/17/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Cellbrowser
+
+Format seurat object into a cellbrowser directory suitable for html browser. 
+
+```{r}
+source("../../R/utils.R")
+library(tidyverse)
+sobj <- readRDS(file.path("objects", "sobj.rds"))
+```
+
+Simplify object metadata to make interpretable
+
+```{r}
+cols <- colnames(sobj@meta.data)
+cols_to_keep <- c(
+  `genes per cell` = "nFeature_RNA",
+  `UMIs per cell` = "nCount_RNA",
+  `percent of UMIs as mitochondria` = "percent.mt",
+  `sample` = "orig.ident",
+  `clusters` = "clusters",
+  `clusters_no_regression` = "clusters_noregress",
+  `Cell cycle phase` = "Phase",
+  `Tabula muris cell type` = "tabula_muris_cell_type")
+
+sobj@meta.data <- sobj@meta.data[, cols_to_keep]
+colnames(sobj@meta.data) <- names(cols_to_keep)
+Idents(sobj) <- "clusters"
+
+# fix "r<0.5, unassigned", the comma causes erros
+
+sobj$`Tabula muris cell type` <- ifelse(sobj$`Tabula muris cell type` == "r<0.5, unassigned",
+                                        "r<0.5 unassigned",
+                                        sobj$`Tabula muris cell type`)
+```
+
+
+
+```{r}
+outdir <- "cellbrowser"
+dir.create(outdir, showWarnings = FALSE)
+# write out rds files with names listed in sobjs
+saveRDS(sobj,file.path(outdir, "cb.rds"))
+```
+
+## Set colors
+
+```{r}
+## default palette (see ../../R/globals.R)
+col_palette <- discrete_palette_default
+
+## summarize per cluster annotations
+to_map <- c("sample",
+            "clusters",
+            "clusters_no_regression",
+            "Cell cycle phase",
+            "Tabula muris cell type")
+
+col_map <- as.list(sobj@meta.data[, to_map]) %>%
+      map(~as.character(unique(.x)))
+
+res <- list()
+
+tmp <- col_palette[1:length(col_map$sample)]
+names(tmp) <- col_map$sample
+res$sample <- tmp 
+
+tmp <- col_palette[1:length(col_map$clusters)]
+names(tmp) <- col_map$clusters
+res$clusters <- tmp 
+
+tmp <- col_palette[1:length(col_map$`Cell cycle phase`)]
+names(tmp) <- col_map$`Cell cycle phase`
+res$`Cell cycle phase` <- tmp 
+  
+tmp <- col_palette[1:length(col_map$`Tabula muris cell type`)]
+names(tmp) <- col_map$`Tabula muris cell type`
+res$`Tabula muris cell type` <- tmp 
+
+tmp <- col_palette[1:length(col_map$clusters_no_regression)]
+names(tmp) <- col_map$clusters_no_regression
+res$clusters_no_regression <- tmp 
+
+map_dfr(res, 
+        ~tibble(clusterName = names(.x), 
+                color = .x)) %>% 
+  as.data.frame() %>% 
+  write_csv("cellbrowser/colorMap.csv", col_names = F, quote_escape = "none")
+
+```
+
+
+Build cellbrowser objects. Note requires UCSC (`cellbrowser python package`[ https://cellbrowser.readthedocs.io/index.html])
+
+```{r}
+dir.create("cellbrowser/markers", recursive = TRUE)
+cols <- colnames(sobj@meta.data)
+names(cols) <- colnames(sobj@meta.data)
+mkrs <- read_tsv("markers/per_cluster_markers_ccregress.tsv") %>% 
+  select(cluster, gene, p_val_adj, everything())
+
+write_tsv(mkrs, "cellbrowser/markers/cluster_markers.tsv")
+
+do.call(function(...) {ExportToCellbrowser(sobj, 
+                    dir = file.path("cellbrowser",
+                                    "mouse_medulloblastoma"),
+                    dataset.name = "mouse_medulloblastoma",
+                    reductions = c("umap", "umap_noregress"),
+                    markers.file = "cellbrowser/markers/cluster_markers.tsv",
+                    cluster.field = "clusters",
+                    ...)}, 
+        as.list(cols))
+
+```
+
+
+
+```{bash}
+cd cellbrowser
+echo -e '\ncolors="/Users/kriemo/Projects/sc_repos/medulloblast/results/mouse_model/cellbrowser/colorMap.csv"' >> mouse_medulloblastoma/cellbrowser.conf
+```
+
+
+
+```{bash}
+cd cellbrowser
+/miniconda3/bin/cbBuild \
+-i ../../cellbrowser/medulloblastoma/cellbrowser.conf \
+-i mouse_medulloblastoma/cellbrowser.conf \
+-o mblast
+```
+
+
+
+
