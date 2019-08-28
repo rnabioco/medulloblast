@@ -35,7 +35,8 @@ discrete_palette_default <- c(palette_OkabeIto,
 #' @param legend_title string to supply for title for the legend
 #' @param embedding dimensionality reduction to extract from seurat_obj. Can be any
 #' dr method present in seurat_obj@dr (e.g. umap, pca, tsne). defaults to tsne
-#'
+#' @param show_negative By default the legend value for continuous features will be clipped at zero.
+#' If false, then the minumum value for the plotted feature will be used.
 plot_feature <- function(seurat_obj,
                          feature = NULL,
                          plot_dat = NULL,
@@ -50,7 +51,8 @@ plot_feature <- function(seurat_obj,
                          col_pal = "Reds",
                          max_y = NULL,
                          legend_title = NULL,
-                         embedding = "tsne"){
+                         embedding = "tsne",
+                         show_negative = FALSE){
 
   mdata <- seurat_obj@meta.data %>% tibble::rownames_to_column("cell")
 
@@ -134,7 +136,8 @@ plot_feature <- function(seurat_obj,
 
   ## handle legend limit
   if (is.null(max_y) & !discrete) {
-    max_y <- c(0, max(embed_dat[[color_aes_str]]))
+    min_value <- ifelse(show_negative, min(embed_dat[[color_aes_str]]), 0L)
+    max_y <- c(min_value, max(embed_dat[[color_aes_str]]))
   } else if (discrete & is.null(max_y)){
     max_y <- c(NA, NA)
   }
@@ -399,3 +402,6 @@ plot_features_split <- function(sobj, feature, group = "orig.ident",
   }
   plts
 }
+
+
+

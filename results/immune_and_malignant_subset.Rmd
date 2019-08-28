@@ -40,12 +40,12 @@ walk(c(fig_dir,mkrs_dir), dir.create, showWarnings = F)
 ```
 
 ```{r get_data}
-sobj <- readRDS(file.path("objects", "sobj.rds"))
+sobj <- readRDS(file.path("objects", "sobj_v2.rds"))
 ```
 
 ```{r, fig.width = 12, fig.height = 12}
 
-malignant_cells <- colnames(sobj)[sobj$cell_phenotype == "Neoplastic"]
+malignant_cells <- colnames(sobj)[sobj$cell_phenotype == "Malignant"]
 
 sobj <- sobj[, malignant_cells]
 sobj <- FindVariableFeatures(sobj, 
@@ -115,6 +115,7 @@ write_tsv(mdata_out, outname)
 
 ```{r}
 saveRDS(sobj, file.path("objects", "malignant_sobj.rds"))
+so <- readRDS(file.path("objects", "malignant_sobj.rds"))
 ```
 
 ## markers
@@ -260,4 +261,13 @@ write_tsv(mkrs_between_samples_df,
 
 openxlsx::write.xlsx(mkrs_between_samples, 
                       file.path(mkrs_dir, "normal_immune_subset_cluster_markers_between_subgroups.xlsx"))
+```
+
+```{r}
+## save object
+
+so <- readRDS(file.path("objects", "immune_sobj.rds"))
+
+so_sub <- subset(so, subset = RNA_snn_res.0.05 == "0")
+FindMarkers(so_sub, ident.1 = "GP4", ident.2 = "SHH", group.by = "subgroup")
 ```

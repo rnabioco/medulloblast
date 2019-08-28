@@ -16,3 +16,9 @@
 *.err
 *.out
 *.swp
+*.json
+*.bin
+*.index
+*.js
+*.npz
+*.joblib

@@ -117,5 +117,13 @@ saveRDS(infercnv_obj, "infercnv.rds")
 
 ```{r}
 dat <- readRDS(file.path(inferCNV_dir, "cnv_output_dir", "run.final.infercnv_obj")) 
+infercnv_obj = infercnv::run(dat,
+                              cutoff=0.1,  # use 1 for smart-seq, 0.1 for 10x-genomics
+                              out_dir="output_dir",  # dir is auto-created for storing outputs
+                              cluster_by_groups=T,   # cluster
+                              denoise=T,
+                              HMM=T,
+                              HMM_type='i6'
+                              )
 
 ```

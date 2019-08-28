@@ -181,6 +181,7 @@ write_tsv(mdata_out, outname)
 
 ```{r}
 saveRDS(sobj, file.path("objects", "gp_sobj.rds"))
+#so <- readRDS(file.path("objects", "gp_sobj.rds"))
 ```
 
 ## markers
