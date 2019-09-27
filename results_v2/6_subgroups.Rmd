@@ -1,0 +1,66 @@
+---
+title: "6_Subgroups"
+author: "Kent Riemondy RBI"
+date: "9/26/2019"
+output: html_document
+---
+
+## Compare to Cavatelli subgroups
+
+```{r, fig.width = 12, fig.height = 12}
+array_mdata <- read.table(file.path(doc_dir,
+                                    "microarray_data",
+                                    "2019_09_04_tidy_CEL_annotation_file_for_Cavalli_2012.txt"),
+                          stringsAsFactors = FALSE) %>% 
+  as_tibble() %>% 
+  mutate(Subtype = str_trim(Subtype))
+
+array_mat <- read.table(file.path(doc_dir,
+                                    "microarray_data",
+                                "2019_09_04_expression_data_all_medullo_Cavalli_GEO_numbers.txt"),
+                        stringsAsFactors = FALSE) %>% 
+  as_tibble()
+
+# average probesets
+expr_mat <- array_mat %>% 
+  gather("key", "value", -sym) %>% 
+  group_by(sym, key) %>% 
+  summarize(value = mean(value)) %>%
+  spread(key, value) %>%
+  as.data.frame() %>% 
+  column_to_rownames("sym") %>% 
+  as.matrix()
+
+# average probesets across subtypes
+avg_mat <- unique(array_mdata$Subtype) %>% 
+  map(function(x){
+    cols <- array_mdata[which(array_mdata$Subtype == x), 
+                   "GEO_number", 
+                   drop = TRUE]
+    
+    vals <- rowMeans(expr_mat[, cols])
+    res <- tibble(sym = names(vals))
+    res[[x]] <- vals
+    res
+    }) %>% 
+  Reduce(function(x, y) {left_join(x, y, by = "sym")}, .) %>% 
+  as.data.frame() %>% 
+  column_to_rownames("sym") %>% 
+  as.matrix()
+
+library(clustifyr)
+
+res <- clustify(so, ref_mat = avg_mat, cluster_col = "coarse_clusters", seurat_out = FALSE) %>% 
+  cor_to_call(.) %>% 
+  left_join(rownames_to_column(so@meta.data, "cell"), .,
+            by = c("coarse_clusters" = "cluster")) %>% 
+  dplyr::select(cell, type, r) %>% 
+  as.data.frame() %>% 
+  column_to_rownames("cell")
+
+so <- AddMetaData(so, res)
+a <- plot_umap(so, "type")
+b <- plot_umap(so, "subgroup")
+d <- plot_umap(so, "UPN")
+plot_grid(a, b, d, nrow = 1)
+```

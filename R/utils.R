@@ -9,10 +9,32 @@ theme_set(theme_cowplot())
 
 palette_OkabeIto <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999")
 
-discrete_palette_default <- c(palette_OkabeIto,
-                              brewer.pal(12, "Paired"),
-                              brewer.pal(9, "Set1"),
-                              brewer.pal(8, "Dark2"))
+tableu_classic_palatte <-
+  c("#1f77b4",
+    "#aec7e8",
+    "#ff7f0e",
+    "#ffbb78",
+    "#2ca02c",
+    "#98df8a",
+    "#d62728",
+    "#ff9896",
+    "#9467bd",
+    "#c5b0d5",
+    "#8c564b",
+    "#c49c94",
+    "#e377c2",
+    "#f7b6d2",
+    "#7f7f7f",
+    "#c7c7c7",
+    "#bcbd22",
+    "#dbdb8d",
+    "#17becf",
+    "#9edae5")
+
+discrete_palette_default <- c(tableu_classic_palatte,
+                             brewer.pal(8, "Dark2"),
+                             palette_OkabeIto)
+
 #' Plot cells in reduced dimensionality 2D space
 #'
 #' @description Cells can be colored by gene or feature in meta.data dataframe
@@ -52,7 +74,8 @@ plot_feature <- function(seurat_obj,
                          max_y = NULL,
                          legend_title = NULL,
                          embedding = "tsne",
-                         show_negative = FALSE){
+                         show_negative = FALSE,
+                         minimal_theme = FALSE){
 
   mdata <- seurat_obj@meta.data %>% tibble::rownames_to_column("cell")
 
@@ -104,9 +127,9 @@ plot_feature <- function(seurat_obj,
     "character",
     "logical"
   ) | is.factor(embed_dat[[feature]])) {
-    discrete <- T
+    discrete <- TRUE
   } else {
-    discrete <- F
+    discrete <- FALSE
   }
 
   ## increase legend size
@@ -187,20 +210,36 @@ plot_feature <- function(seurat_obj,
       )
     }
   }
+
+  # drop axes, labels, and legend, just plot feature title and projection
+  if(minimal_theme){
+  p <- p +
+    labs(title = feature) +
+    theme_void() +
+    theme(legend.position="none",
+          plot.title = element_text(hjust = 0.5))
+  }
+
   p
 }
 
 
 plot_umap <- function(...){
-  plot_feature(..., embedding = "umap")
+  plot_feature(..., embedding = "umap") +
+    labs(x = "UMAP 1",
+         y = "UMAP 2")
 }
 
 plot_tsne <- function(...){
-  plot_feature(..., embedding = "tsne")
+  plot_feature(..., embedding = "tsne") +
+    labs(x = "tSNE 1",
+         y = "tSNE 2")
 }
 
 plot_pca <- function(...){
-  plot_feature(..., embedding = "pca")
+  plot_feature(..., embedding = "pca") +
+    labs(x = "PC 1",
+         y = "PC 2")
 }
 
 plot_violin <- function(df, .x, .y,
@@ -326,6 +365,48 @@ set_xlsx_class <- function(df, col, xlsx_class){
   df
 }
 
+write_markers_xlsx <- function(mrkr_list,
+                               path,
+                               description_string = "Genes differentially expressed between each cluster and all other cells"){
+
+  readme_sheet <- tibble(
+    Columns = c(
+      description_string,
+      "",
+      "Columns",
+      "pval",
+      "avg_logFC",
+      "pct.1",
+      "pct.2",
+      "p_val_adj",
+      "cluster",
+      "gene"
+    ), Description = c(
+      "",
+      "",
+      "",
+      "p-value from wilcox test of indicated cluster compared to other clusters",
+      "average fold change expressed in natural log",
+      "percent of cells expressing gene (UMI > 0) in cluster",
+      "percent of cell expressing gene (UMI > 0) in all other clusters",
+      "Bonferroni corrected p-value",
+      "cluster name",
+      "gene name"
+    ))
+  readme_sheet <- list(README = readme_sheet)
+  names(readme_sheet) <- "README"
+
+  xcel_out <- map(mrkr_list,
+                  ~set_xlsx_class(.x, "gene", "Text"))
+
+  xcel_out <- c(readme_sheet,  xcel_out)
+
+  # santize for spreadsheet tab names
+  names(xcel_out) <- str_replace_all(names(xcel_out), "[[:punct:]]", " ")
+  openxlsx::write.xlsx(xcel_out,
+                       path)
+
+}
 
 #' Extract out reduced dimensions and cell metadata to tibble
 #'
@@ -404,4 +485,57 @@ plot_features_split <- function(sobj, feature, group = "orig.ident",
 }
 
 
+#' Run fGSEA on gene lists
+#'
+run_fgsea <- function(ranked_gene_list,
+                      species = c("human", "mouse"),
+                      database = reactome.db::reactome.db,
+                      convert_ids = TRUE,
+                      min_size=15,
+                      max_size=500,
+                      n_perm=10000,
+                      ...){
+
+  stopifnot(requireNamespace("reactome.db"))
+  stopifnot(requireNamespace("fgsea"))
+  stopifnot(requireNamespace("AnnotationDbi"))
+  stopifnot(requireNamespace("org.Hs.eg.db"))
+  stopifnot(requireNamespace("org.Mm.eg.db"))
+
+  if(convert_ids){
+    message("converting gene symbols to entrez ids")
+    if(species[1] == "human") {
+      gs_db <- org.Hs.eg.db
+    } else if (species[1] == "mouse") {
+      gs_db <- org.Mm.eg.db
+    } else {
+      gs_db <- species
+    }
+
+    e_ids <- mapIds(gs_db, names(ranked_gene_list), 'ENTREZID', 'SYMBOL')
+    e_ids <- e_ids[names(ranked_gene_list)]
+
+    new_gene_list <- ranked_gene_list
+    names(new_gene_list) <- e_ids
+    new_gene_list <- new_gene_list[!is.na(names(new_gene_list))]
+
+  } else {
+    new_gene_list <- gene_list
+  }
+
+  pathways <- fgsea::reactomePathways(names(new_gene_list))
+
+  res <- list()
+  res$fgsea <- fgsea(pathways = pathways,
+                    stats = new_gene_list,
+               minSize=min_size,
+               maxSize=max_size,
+               nperm=n_perm,
+                ...)
+
+  res$pathways <- pathways
+  res$ids <- new_gene_list
+  res
+
+}
 

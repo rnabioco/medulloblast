@@ -1,0 +1,253 @@
+---
+title: "Immune populations"
+author: "Kent Riemondy RBI"
+date: "9/26/2019"
+output: html_document
+---
+
+
+## Subset immune populations
+
+
+```{r}
+so <- readRDS(file.path("objects", "so.rds"))
+```
+
+```{r}
+immune_cells <- colnames(so)[so$coarse_cell_type %in% c("t-cells",
+                                                        "b-cells", 
+                                                        "macrophage_monocytes")]
+
+so <- so[, immune_cells]
+so <- FindVariableFeatures(so, 
+                             selection.method = "vst", 
+                             nfeatures = 3000, 
+                             verbose = FALSE)
+
+so <- ScaleData(so, 
+                  vars.to.regress = c("percent.mt", "nCount_RNA"), 
+                  verbose = TRUE)
+
+so <- RunPCA(so, npcs = 40, verbose = FALSE)
+
+so <- FindNeighbors(so,
+                      reduction = "pca",
+                      dims = 1:20,
+                      k.param = 20)
+
+so <- RunUMAP(so, graph = "RNA_snn")
+
+
+so <- FindClusters(so, resolution = c(0.3, 0.1, 0.05, 0.02, .01))
+
+
+so$fine_immune_clusters <- so$RNA_snn_res.0.3
+
+
+clusters <- so$fine_immune_clusters
+
+so$refined_immune_clusters <- ifelse(clusters %in% c("2", "3", "5", "6",
+                                                     "7", "9"),
+                                     "macrophage_monocytes",
+                                     ifelse(clusters %in% c("4"),
+                                            "b-cells",
+                                            ifelse(clusters %in% c("0",
+                                                                   "1",
+                                                                   "11","10"),
+                                                   "t-cells",
+                                                   ifelse(clusters == "8",
+                                                          "macrophage_monocytes_minor",
+                                                          "unknown"))))
+
+```
+
+
+```{r}
+outdir <- "figs/immune_subset/"
+dir.create(outdir, showWarnings = FALSE)
+
+plts <- map(str_subset(colnames(so@meta.data), "RNA_snn"), 
+            ~plot_umap(so, .x) + 
+              labs(title = .x))
+
+p_1 <- plot_umap(so, "subgroup") + labs(title = "Subgroup")
+p_2 <- plot_umap(so, "refined_immune_clusters") + labs(title = "Cell Type")
+plts <- c(plts, list(p_1), list(p_2))
+
+plt <- plot_grid(plotlist = plts, nrow = 3, ncol = 3)
+save_plot(file.path(outdir, "umaps_by_resolution.pdf"), 
+          plt, 
+          nrow = 3, ncol = 3)
+
+
+plts <- map(c("refined_immune_clusters", "subgroup", "UPN"),
+    ~plot_umap(so, .x))
+
+plt <- plot_grid(plotlist = plts, nrow = 1, ncol = 3)
+save_plot(file.path(outdir, "umaps_by_class.pdf"), 
+          plt, 
+          nrow = 1, ncol = 3)
+```
+
+## save object
+
+```{r }
+saveRDS(so, file.path("objects", "immune_sobj.rds"))
+```
+
+
+## Markers within cluster
+
+```{r, eval = F}
+Idents(so) <- "refined_immune_clusters"
+
+mkrs_between_samples <- map(unique(sort(so$refined_immune_clusters)), 
+    function(x) {
+      
+      tmp_obj <- subset(so, idents = x)
+      Idents(tmp_obj) <- "subgroup"
+      mkrs <- FindAllMarkers(tmp_obj,
+                          only.pos = TRUE) %>% 
+         filter(p_val_adj < 0.01)
+      mkrs
+    })
+
+names(mkrs_between_samples) <- unique(sort(so$refined_immune_clusters))
+
+mkrs_between_samples_df <- bind_rows(mkrs_between_samples, 
+                                  .id = "cluster")
+write_tsv(mkrs_between_samples_df, 
+          file.path(mkrs_dir, "immune_subset_cluster_markers_between_subgroups.tsv"))
+
+openxlsx::write.xlsx(mkrs_between_samples, 
+                      file.path(mkrs_dir, "immune_subset_cluster_markers_between_subgroups.xlsx"))
+```
+
+```{r}
+## reload object
+
+so <- readRDS(file.path("objects", "immune_sobj.rds"))
+
+so_sub <- subset(so, 
+                 subset = refined_immune_clusters == "macrophage_monocytes")
+
+mkrs <- FindMarkers(so_sub, 
+                    ident.1 = "GP4", 
+                    ident.2 = "SHH", 
+                    group.by = "subgroup")
+
+mkrs <- tibble::rownames_to_column(mkrs, "gene")
+
+write_tsv(mkrs, 
+          file.path(mkrs_dir, 
+                    "macrophage_markers_between_gp4_shh.tsv"))
+```
+
+```{r}
+
+mkrs <- arrange(mkrs, 
+                p_val_adj)
+up_mkrs <- filter(mkrs, avg_logFC > 0) %>% slice(1:50)
+down_mkrs <- filter(mkrs, avg_logFC < 0) %>% slice(1:50)
+
+top_mkrs <- bind_rows(up_mkrs, down_mkrs)
+
+library(ComplexHeatmap)
+
+Idents(so_sub) <- "subgroup"
+
+to_plot <- log1p(AverageExpression(so_sub)$RNA)
+to_plot <- to_plot[top_mkrs$gene, ] 
+
+to_plot <- t(scale(t(as.matrix(to_plot))))
+
+hm <- Heatmap(to_plot, col = viridis::viridis(256),
+        name = "Z-score")
+
+pdf("macrophages_differences_between_subgroups.pdf", height = 16)
+print(hm)
+dev.off()
+
+
+xcel_out <- list()
+xcel_out$macrophages <- mkrs
+```
+
+
+```{r}
+so_sub <- subset(so, 
+                 subset = refined_immune_clusters == "t-cells")
+
+mkrs <- FindMarkers(so_sub, 
+                    ident.1 = "GP4", 
+                    ident.2 = "SHH", 
+                    group.by = "subgroup")
+
+mkrs <- tibble::rownames_to_column(mkrs, "gene")
+
+write_tsv(mkrs, 
+          file.path(mkrs_dir, 
+                    "tcells_markers_between_gp4_shh.tsv"))
+
+```
+
+```{r}
+
+mkrs <- arrange(mkrs, 
+                p_val_adj)
+up_mkrs <- filter(mkrs, avg_logFC > 0) %>% slice(1:50)
+down_mkrs <- filter(mkrs, avg_logFC < 0) %>% slice(1:50)
+
+top_mkrs <- bind_rows(up_mkrs, down_mkrs)
+
+library(ComplexHeatmap)
+
+Idents(so_sub) <- "subgroup"
+
+to_plot <- log1p(AverageExpression(so_sub)$RNA)
+to_plot <- to_plot[top_mkrs$gene, ] 
+
+to_plot <- t(scale(t(as.matrix(to_plot))))
+
+hm <- Heatmap(to_plot, col = viridis::viridis(256),
+        name = "Z-score")
+
+pdf("t-cell_differences_between_subgroups.pdf", height = 16)
+print(hm)
+dev.off()
+
+
+xcel_out$t_cells <- mkrs
+
+xcel_out <- map(xcel_out, 
+                       ~set_xlsx_class(.x, "gene", "Text"))
+
+openxlsx::write.xlsx(xcel_out, 
+                     "markers/shh_gp4_immune_cell_differences.xlsx")
+```
+
+
+```{r}
+to_plot <- c("refined_immune_clusters", 
+"subgroup",
+  "UPN")
+
+plts <- map(to_plot, ~plot_umap(so, .x))
+
+
+
+plt <- plot_grid(plotlist = plts, nrow = 2, ncol = 2,
+                 rel_widths = c(1.75, 1.25))
+save_plot("immune_population_umaps.pdf", plt, 
+          nrow = 2, ncol = 2, base_asp = 1.2)
+
+
+plts <- map(c("MRC1", "CCL3"), ~plot_umap(so, .x))
+
+
+plt <- plot_grid(plotlist = plts, nrow = 1)
+save_plot("immune_population_umaps_expr.pdf", plt, 
+          nrow = 1, ncol = 2, base_asp = 1.2)
+
+```
+

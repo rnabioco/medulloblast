@@ -1,0 +1,1127 @@
+---
+title: "3_mouse_model_comparison.Rmd"
+author: "Kent Riemondy RBI"
+date: "9/3/2019"
+output: html_document
+---
+
+```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
+source("../R/utils.R")
+library(openxlsx)
+library(future)
+plan(strategy = "multicore", workers = 6)
+options(future.globals.maxSize =4 * 1024 ^ 3)
+
+proj_dir <- here()
+data_dir <- file.path(proj_dir, "data", "cellranger", "results")
+doc_dir <- file.path(proj_dir, "docs")
+
+fig_dir <- "figs"
+mkrs_dir <- "markers"
+tbls_dir <- "tables"
+mkrs_tsv_dir <- file.path(mkrs_dir, "tsv")
+mkrs_xlsx_dr <- file.path(mkrs_dir, "xlsx")
+
+walk(c(fig_dir,
+       mkrs_dir,
+       tbls_dir,
+       mkrs_tsv_dir,
+       mkrs_xlsx_dr), dir.create, showWarnings = F)
+
+```
+
+# Get ortholog table
+
+Download list of orthologs between mouse and human as gene symbols.
+
+```{r}
+ortholog_table <- "../dbases/mouse_orthologs.tsv"
+
+if(!file.exists(ortholog_table)){
+  library(biomaRt)
+  ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+  orthologs <- getBM(mart = ensembl, 
+      attributes = c("external_gene_name",
+                     "mmusculus_homolog_associated_gene_name"))
+  write_tsv(orthologs, ortholog_table)
+}
+
+orthologs <- read_tsv(ortholog_table)
+```
+
+# SHH mouse model
+
+## Preprocess
+```{r get_data}
+samples <- c(
+  "MED9_1",
+  "MED11_2",
+  "MED21_3"
+)
+sample_paths <- file.path(data_dir,
+                          samples,
+                          "outs", 
+                          "filtered_feature_bc_matrix")
+
+names(sample_paths) <- samples
+
+mat <- Read10X(sample_paths)
+```
+
+
+### General QC for library prep  {.tabset}
+
+```{r }
+
+metrics_paths <- file.path(data_dir,
+                          samples,
+                          "outs", 
+                          "metrics_summary.csv")
+
+names(metrics_paths) <- samples
+
+mapping_dat <- map_dfr(metrics_paths, read_csv, .id = "sample")
+
+clean_up_metadata <- function(metrics_summary) {
+  metrics_summary <- mutate_all(metrics_summary, str_remove, "%$")
+  metrics_summary <- mutate_at(metrics_summary, 
+                               .vars = 2:ncol(metrics_summary),
+                               as.numeric)
+  metrics_summary
+}
+
+mapping_dat <- clean_up_metadata(mapping_dat)
+
+metrics <- colnames(mapping_dat)[2:ncol(mapping_dat)]
+
+mapping_dat <- mapping_dat %>% 
+  gather(metric, value, -sample) %>% 
+  mutate(sample = factor(sample, levels = unique(sample)))
+
+p <- map(metrics, 
+    function(x) {
+    filter(mapping_dat, metric == x) %>% 
+          ggplot(aes(sample, value)) +
+            geom_point(aes(color = sample)) +
+        scale_color_brewer(palette = "Paired") + 
+        labs(y = x, 
+             x = "") +
+        theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+}) 
+```
+
+```{r, results ='asis'}
+
+for(i in seq_along(p)){
+  cat('\n### ', metrics[i], '\n')
+  print(p[i])
+  cat('\n')
+}
+```
+
+
+## Preprocessing {.tabset}
+
+```{r create_seurat, message = F, results = 'hide', warning = F}
+
+so <- CreateSeuratObject(
+  mat,
+  min.cells = 3,
+  min.features = 200,
+  names.delim = "_",
+  names.field = c(1, 2)
+)
+
+so <- PercentageFeatureSet(so, pattern = "^mt-", col.name = "percent.mt")
+
+so@meta.data <- so@meta.data %>% 
+  tibble::rownames_to_column("cell") %>% 
+  mutate(UPN = orig.ident) %>% 
+  as.data.frame() %>% 
+  tibble::column_to_rownames("cell")
+
+dir.create(file.path("objects",
+                     "mouse_models"),
+           showWarnings = FALSE)
+
+rm(mat)
+a <- gc()
+```
+
+### Percent Mitochondrial UMIs 
+
+```{r}
+plot_violin(so@meta.data, "orig.ident", "percent.mt", .fill = "orig.ident") +
+  labs(x = "", y = "Percent UMIs from Mitochondria")
+```
+
+
+### # of genes detected 
+
+```{r}
+plot_violin(so@meta.data, "orig.ident", "nFeature_RNA", .fill = "orig.ident") +
+  labs(x = "", y = "# of genes per cell")
+```
+
+
+### # of UMIs detected
+
+```{r}
+plot_violin(so@meta.data, "orig.ident", "nCount_RNA", .fill = "orig.ident") +
+  labs(x = "", y = "# of UMIs") 
+```
+
+### Table of mitochondrial proportions per sample
+
+```{r}
+so@meta.data %>% 
+  group_by(UPN) %>% 
+  summarize(median_percent_mito = median(percent.mt), 
+            mean_percent_mito = mean(percent.mt)) %>% 
+  arrange(desc(median_percent_mito))
+
+```
+
+
+## Relationship between UMIs and % mitochondria {.tabset}
+
+### All samples
+```{r, fig.width = 12, fig.height = 8}
+sample_names <- as.character(unique(so@meta.data$orig.ident))
+per_sample <- map(sample_names, ~filter(so@meta.data, 
+                                        orig.ident == .x))
+p <- list()
+for(i in seq_along(per_sample)){
+  .col <- discrete_palette_default[i]
+  p[[i]] <- ggplot(per_sample[[i]], aes(nCount_RNA, percent.mt)) +
+        geom_point(aes(color = UPN)) +
+        scale_color_manual(values = .col)
+}
+
+plot_grid(plotlist= p, nrow = 1, ncol = 3)
+```
+
+```{r, results ='asis'}
+
+for(i in seq_along(per_sample)){
+  .col <- discrete_palette_default[i]
+  cat('\n### ', sample_names[i], '\n')
+  p <- ggplot(per_sample[[i]], aes(nCount_RNA, percent.mt)) +
+        geom_point(aes(color = UPN)) +
+        scale_color_manual(values = .col)
+  print(p)
+  cat('\n')
+}
+```
+
+
+## Filter cells and samples.
+
+Suggest removing cells with > 20% mitochondrial UMIs. 
+
+```{r}
+so <- subset(so, subset = percent.mt < 20)
+```
+
+## Normalize and embed into 2D with UMAP
+
+```{r}
+so <- NormalizeData(so, verbose = FALSE)
+
+so <- FindVariableFeatures(so, 
+                           selection.method = "vst", 
+                           nfeatures = 3000, 
+                           verbose = FALSE)
+
+so <- ScaleData(so, 
+                #vars.to.regress = c("percent.mt", "nCount_RNA"), 
+                verbose = TRUE)
+
+so <- RunPCA(so, npcs = 40, verbose = FALSE)
+
+ElbowPlot(so, ndims = 40)
+
+so <- FindNeighbors(so, 
+                    reduction = "pca", 
+                    dims = 1:30)
+
+so <- RunUMAP(so, 
+              graph = "RNA_snn", 
+              min.dist = 0.3
+)
+
+plts <- list()
+plts[[1]] <- plot_feature(so, "orig.ident", embedding = "umap") 
+plts[2:4] <- plot_features_split(so, 
+                                 "orig.ident", "orig.ident", 
+                                 embedding = "umap",
+                                 cols = discrete_palette_default)
+
+p <- plot_grid(plotlist = plts, nrow = 2, ncol = 2)
+p
+```
+
+```{r}
+so <- FindClusters(so, resolution = 0.32)
+
+so$clusters<- so$seurat_clusters
+so$seurat_clusters <- NULL
+so$RNA_snn_res.0.32 <- NULL
+
+plts <- list()
+plts[[1]] <- plot_feature(so, "clusters", embedding = "umap") + labs(title = "All samples")
+plts[2:4] <- plot_features_split(so, "clusters", "orig.ident", embedding = "umap", add_title = TRUE)
+
+p <- plot_grid(plotlist = plts, nrow = 2, ncol = 2)
+p
+
+```
+
+Add cell cycle stage
+
+```{r, fig.width = 12}
+so <- CellCycleScoring(so,
+                       cc.genes$s.genes,
+                       cc.genes$g2m.genes)
+
+cc_scores <- c(
+  "Pola1",
+  "Mcm2",
+  "Mki67",
+  "Phase",
+  "S.Score",
+  "G2M.Score"
+)
+
+plts <- map(cc_scores,
+            ~plot_umap(so, 
+                       .x, 
+                       show_negative = TRUE))
+plt <- plot_grid(plotlist = plts, nrow = 2,
+                 ncol = 3)
+plt
+
+```
+
+
+Assign cell_types with clustifyr
+
+```{r}
+library(clustifyr)
+library(ComplexHeatmap)
+
+tm_average <- readRDS("/Users/kriemo/Projects/sc_repos/vanotterloo/data/tabula_muris/TM_avg_expr.rds")
+
+mdata <- get_metadata(so)
+
+res <- clustify(so@assays$RNA@data, 
+                tm_average, 
+                query_genes = so@assays$RNA@var.features,
+                metadata = mdata, 
+                cluster_col = "clusters", 
+                compute_method = "spearman")
+
+hmap <- Heatmap(t(res), 
+                viridis::viridis(256), 
+                "Spearman\ncorrelation",
+                row_title = "Cell types from Tabula Muris",
+                column_title = "Clusters")
+
+hmap
+
+top_cell_types <- cor_to_call(res, threshold = 0.5)
+
+so@meta.data <- so@meta.data %>% 
+  tibble::rownames_to_column("cell") %>% 
+  left_join(top_cell_types, 
+            by = c("clusters" = "cluster")) %>% 
+  dplyr::rename(tabula_muris_cell_type = type,
+                cor_value = r) %>% 
+  tibble::column_to_rownames("cell")
+```
+
+```{r}
+map(c("clusters", "tabula_muris_cell_type"), 
+    ~plot_umap(so, .x, label_text = TRUE, 
+               label_col = "black")) 
+```
+
+#### Get markers
+
+```{r}
+Idents(so) <- "clusters"
+mkrs <- FindAllMarkers(so, only.pos = TRUE)
+
+
+write_tsv(mkrs, 
+          file.path(mkrs_tsv_dir, "shh_cluster_markers.tsv"))
+
+mkrs_list <- split(mkrs, mkrs$cluster)
+
+write.xlsx(mkrs_list, 
+           file.path(mkrs_xlsx_dr,
+                     "shh_cluster_markers.xlsx"))
+```
+
+
+### fix cell type assignments
+
+Cluster 8 expresses `Olig1`, suggesting that these cells are oligodendrocytes. Cluster 10 expresses `Mlc1` suggesting that these are astroglial cells.
+
+Cluster 1 are kidney capillary endothelial cells, which would be brain endothelial cells or perictyes. 
+
+Cluster 4 are macrophages
+
+Cluster 5 are fibroblasts
+
+Cluster 6 are neuroendocrine cells
+
+Cluster 9 are monocytes
+
+Clusters 0, 11, 2, 3, 7 are malignant cells.
+
+```{r}
+new_ids <- c(
+  '1' = "endothelial",
+  '4' = "macrophages",
+  '5' = "fibroblasts",
+  '6' = "neuroendocrine",
+  '8' = "oligodendrocytes",
+  '9' = "monocytes",
+  '10' = "astroglia",
+  '0' = "malignant",
+  '11' = "malignant",
+  '2' = "malignant",
+  '3' = "malignant",
+  '7' = "malignant"
+)
+
+
+so@meta.data$cell_types <- new_ids[so@meta.data$clusters]
+
+map(c("clusters", "cell_types"), 
+    ~plot_umap(so, .x, label_text = TRUE, 
+               label_col = "black")) 
+
+```
+
+### Write out metadata
+
+
+```{r} 
+mdata_out <- get_metadata(so)
+outname <- file.path("tables", 
+                     paste0("shh_metadata_", 
+                            format(Sys.Date(), "%Y_%m_%d"), 
+                            ".tsv.gz"))
+write_tsv(mdata_out, outname)
+
+saveRDS(so, file.path("objects",
+                  "mouse_models",
+                  "shh_model_sobj.rds"))
+```
+
+
+
+# GP mouse model
+
+>
+For the mouse samples
+MP control and MP luc-GFP are similar and both from MP (MYC + DNP53 expression in CD133+ cells) tumor models expressing luciferase. (DN= dominant negative p53)
+MG CD2 luc is the second model (MYC + GFI1 expression in CD133+ cells).
+>
+
+10.1016/j.ccr.2011.12.021
+
+## Preprocess
+
+```{r get_data}
+samples <- c(
+  "1_Mpcont",
+  "2_MP_luc_GFP",
+  "3_MG"
+)
+
+sample_paths <- file.path(data_dir,
+                          samples,
+                          "outs", 
+                          "filtered_feature_bc_matrix")
+
+names(sample_paths) <- samples
+
+mat <- Read10X(sample_paths)
+```
+
+
+### General QC for library prep  {.tabset}
+
+```{r }
+
+metrics_paths <- file.path(data_dir,
+                          samples,
+                          "outs", 
+                          "metrics_summary.csv")
+
+names(metrics_paths) <- samples
+
+mapping_dat <- map_dfr(metrics_paths, read_csv, .id = "sample")
+
+clean_up_metadata <- function(metrics_summary) {
+  metrics_summary <- mutate_all(metrics_summary, str_remove, "%$")
+  metrics_summary <- mutate_at(metrics_summary, 
+                               .vars = 2:ncol(metrics_summary),
+                               as.numeric)
+  metrics_summary
+}
+
+mapping_dat <- clean_up_metadata(mapping_dat)
+
+metrics <- colnames(mapping_dat)[2:ncol(mapping_dat)]
+
+mapping_dat <- mapping_dat %>% 
+  gather(metric, value, -sample) %>% 
+  mutate(sample = factor(sample, levels = unique(sample)))
+
+p <- map(metrics, 
+    function(x) {
+    filter(mapping_dat, metric == x) %>% 
+          ggplot(aes(sample, value)) +
+            geom_point(aes(color = sample)) +
+        scale_color_brewer(palette = "Paired") + 
+        labs(y = x, 
+             x = "") +
+        theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+}) 
+```
+
+```{r, results ='asis'}
+
+for(i in seq_along(p)){
+  cat('\n### ', metrics[i], '\n')
+  print(p[i])
+  cat('\n')
+}
+```
+
+
+## Preprocessing {.tabset}
+
+```{r create_seurat, message = F, results = 'hide', warning = F}
+
+so <- CreateSeuratObject(
+  mat,
+  min.cells = 3,
+  min.features = 200,
+  names.delim = "_",
+  names.field = c(1, 2)
+)
+
+so <- PercentageFeatureSet(so, pattern = "^mt-", col.name = "percent.mt")
+
+so@meta.data <- so@meta.data %>% 
+  tibble::rownames_to_column("cell") %>% 
+  mutate(UPN = orig.ident) %>% 
+  as.data.frame() %>% 
+  tibble::column_to_rownames("cell")
+
+dir.create(file.path("objects",
+                     "mouse_models"),
+           showWarnings = FALSE)
+
+rm(mat)
+a <- gc()
+```
+
+### Percent Mitochondrial UMIs 
+
+```{r}
+plot_violin(so@meta.data, "orig.ident", "percent.mt", .fill = "orig.ident") +
+  labs(x = "", y = "Percent UMIs from Mitochondria")
+```
+
+
+### # of genes detected 
+
+```{r}
+plot_violin(so@meta.data, "orig.ident", "nFeature_RNA", .fill = "orig.ident") +
+  labs(x = "", y = "# of genes per cell")
+```
+
+
+### # of UMIs detected
+
+```{r}
+plot_violin(so@meta.data, "orig.ident", "nCount_RNA", .fill = "orig.ident") +
+  labs(x = "", y = "# of UMIs") 
+```
+
+### Table of mitochondrial proportions per sample
+
+```{r}
+so@meta.data %>% 
+  group_by(UPN) %>% 
+  summarize(median_percent_mito = median(percent.mt), 
+            mean_percent_mito = mean(percent.mt)) %>% 
+  arrange(desc(median_percent_mito))
+
+```
+
+
+## Relationship between UMIs and % mitochondria {.tabset}
+
+### All samples
+```{r, fig.width = 12, fig.height = 8}
+sample_names <- as.character(unique(so@meta.data$orig.ident))
+per_sample <- map(sample_names, ~filter(so@meta.data, 
+                                        orig.ident == .x))
+p <- list()
+for(i in seq_along(per_sample)){
+  .col <- discrete_palette_default[i]
+  p[[i]] <- ggplot(per_sample[[i]], aes(nCount_RNA, percent.mt)) +
+        geom_point(aes(color = UPN)) +
+        scale_color_manual(values = .col)
+}
+
+plot_grid(plotlist= p, nrow = 1, ncol = 3)
+```
+
+```{r, results ='asis'}
+
+for(i in seq_along(per_sample)){
+  .col <- discrete_palette_default[i]
+  cat('\n### ', sample_names[i], '\n')
+  p <- ggplot(per_sample[[i]], aes(nCount_RNA, percent.mt)) +
+        geom_point(aes(color = UPN)) +
+        scale_color_manual(values = .col)
+  print(p)
+  cat('\n')
+}
+```
+
+
+## Filter cells and samples.
+
+Suggest removing cells with > 20% mitochondrial UMIs. 
+
+```{r}
+so <- subset(so, subset = percent.mt < 20)
+```
+
+## Normalize and embed into 2D with UMAP
+
+```{r}
+so <- NormalizeData(so, verbose = FALSE)
+
+so <- FindVariableFeatures(so, 
+                           selection.method = "vst", 
+                           nfeatures = 3000, 
+                           verbose = FALSE)
+
+so <- ScaleData(so, 
+                #vars.to.regress = c("percent.mt", "nCount_RNA"), 
+                verbose = TRUE)
+
+so <- RunPCA(so, npcs = 40, verbose = FALSE)
+
+ElbowPlot(so, ndims = 40)
+
+so <- FindNeighbors(so, 
+                    reduction = "pca", 
+                    dims = 1:30)
+
+so <- RunUMAP(so, 
+              graph = "RNA_snn", 
+              min.dist = 0.3
+)
+
+plts <- list()
+plts[[1]] <- plot_feature(so, "orig.ident", embedding = "umap") 
+plts[2:4] <- plot_features_split(so, 
+                                 "orig.ident", "orig.ident", 
+                                 embedding = "umap",
+                                 cols = discrete_palette_default)
+
+p <- plot_grid(plotlist = plts, 
+               nrow = 2, 
+               ncol = 2)
+p
+```
+
+```{r}
+so <- FindClusters(so, resolution = 0.32)
+
+so$clusters<- so$seurat_clusters
+so$seurat_clusters <- NULL
+so$RNA_snn_res.0.32 <- NULL
+
+plts <- list()
+plts[[1]] <- plot_feature(so, "clusters", embedding = "umap") + labs(title = "All samples")
+plts[2:4] <- plot_features_split(so, "clusters", "orig.ident", embedding = "umap", add_title = TRUE)
+
+p <- plot_grid(plotlist = plts, nrow = 2, ncol = 2)
+p
+
+```
+
+Add cell cycle stage
+
+```{r, fig.width = 12}
+so <- CellCycleScoring(so,
+                       cc.genes$s.genes,
+                       cc.genes$g2m.genes)
+
+cc_scores <- c(
+  "Pola1",
+  "Mcm2",
+  "Mki67",
+  "Phase",
+  "S.Score",
+  "G2M.Score"
+)
+
+plts <- map(cc_scores,
+            ~plot_umap(so, 
+                       .x, 
+                       show_negative = TRUE))
+plt <- plot_grid(plotlist = plts, nrow = 2,
+                 ncol = 3)
+plt
+
+```
+
+
+Assign cell_types with clustifyr
+
+```{r}
+tm_average <- readRDS("/Users/kriemo/Projects/sc_repos/vanotterloo/data/tabula_muris/TM_avg_expr.rds")
+
+mdata <- get_metadata(so)
+
+res <- clustify(so@assays$RNA@data, 
+                tm_average, 
+                query_genes = so@assays$RNA@var.features,
+                metadata = mdata, 
+                cluster_col = "clusters", 
+                compute_method = "spearman")
+
+hmap <- Heatmap(t(res), 
+                viridis::viridis(256), 
+                "Spearman\ncorrelation",
+                row_title = "Cell types from Tabula Muris",
+                column_title = "Clusters")
+
+hmap
+
+top_cell_types <- cor_to_call(res, threshold = 0.5)
+
+so@meta.data <- so@meta.data %>% 
+  tibble::rownames_to_column("cell") %>% 
+  left_join(top_cell_types, 
+            by = c("clusters" = "cluster")) %>% 
+  dplyr::rename(tabula_muris_cell_type = type,
+                cor_value = r) %>% 
+  tibble::column_to_rownames("cell")
+```
+
+```{r}
+map(c("clusters", "tabula_muris_cell_type"), 
+    ~plot_umap(so, .x, label_text = TRUE, 
+               label_col = "black")) 
+```
+
+#### Get markers
+
+```{r}
+Idents(so) <- "clusters"
+mkrs <- FindAllMarkers(so, only.pos = TRUE)
+
+
+write_tsv(mkrs, 
+          file.path(mkrs_tsv_dir, "mb_models_cluster_markers.tsv"))
+
+mkrs_list <- split(mkrs, mkrs$cluster)
+
+write.xlsx(mkrs_list, 
+           file.path(mkrs_xlsx_dr,
+                     "mb_models_cluster_markers.xlsx"))
+```
+
+
+
+
+
+### Annotate with gfp/luc reads
+
+```{r count_gfp}
+count_transgenes <- function(sam_path, cb_prefix = "") {
+  sam_lines <- read_lines(sam_path) %>%
+    .[!str_detect(., "^@")] %>%
+    str_split(., "\t")
+  
+  
+  alignment_lines <- map_dfr(sam_lines,
+                             function(x) {
+                               read_info <- str_remove(x[1], "_$")
+                               read_info <-
+                                 str_split(read_info, "_")[[1]]
+                               
+                               if (length(read_info) == 3) {
+                                 read <- read_info[1]
+                                 cb <- read_info[2]
+                                 umi <- read_info[3]
+                               } else{
+                                 read <- read_info[1]
+                                 cb <- NA
+                                 umi <- NA
+                               }
+                               
+                               contig <- x[3]
+                               flag <- x[2]
+                               tibble(read, cb, umi, contig, flag)
+                             }) %>%
+    na.omit() %>%
+    filter(flag == 0)
+  
+  
+  res <- group_by(alignment_lines, cb, umi, contig) %>%
+    summarize(n()) %>%
+    group_by(cb, contig) %>%
+    summarize(n_umi = n()) %>% 
+    ungroup()
+  # fix cell barcode ids
+  
+  res <- mutate(res, 
+                cb = str_remove(cb, "^CB:Z:"),
+                cb = str_remove(cb, "-[0-9]$"),
+                cb = str_c(cb_prefix, cb))
+  
+  res <- spread(res, contig, n_umi, fill = 0L)
+  res
+}
+
+sample_paths <- file.path(data_dir,
+                          samples,
+                          "outs",
+                          "tg.sam")
+
+tg_counts <- map2_dfr(sample_paths, str_c(samples, "_"), count_transgenes) %>% 
+  mutate_if(is.numeric, log1p)
+
+so@meta.data <- so@meta.data %>% 
+  rownames_to_column("cb") %>% 
+  left_join(tg_counts, by = "cb") %>%
+  mutate(egfp = ifelse(is.na(egfp),
+                       0L,
+                       egfp),
+         `luc-firefly` = ifelse(is.na(`luc-firefly`),
+                       0L,
+                       `luc-firefly`)) %>% 
+  column_to_rownames("cb") 
+
+
+map(c("egfp", "luc-firefly"), 
+    ~plot_umap(so, .x))                     
+```
+
+
+### fix cell type assignments
+
+
+```{r}
+new_ids <- c(
+  '10' = "endothelial",
+  '12' = "neuroendocrine",
+  '7' = "monocytes",
+  '9' = "t-cells",
+  '11' = "granulocyte",
+  '0' = 'malignant',
+  '1' = 'malignant',
+  '2' = 'malignant',
+  '3' = 'malignant',
+  '5' = 'malignant',
+  '6' = 'malignant',
+  '8' = 'malignant',
+  '4' = "malignant"
+  )
+
+
+so@meta.data$cell_types <- new_ids[so@meta.data$clusters]
+
+map(c("clusters", "cell_types"), 
+    ~plot_umap(so, .x, label_text = TRUE, 
+               label_col = "black")) 
+
+```
+
+### Write out metadata
+
+
+```{r} 
+mdata_out <- get_metadata(so)
+outname <- file.path("tables", 
+                     paste0("mb_models_metadata_", 
+                            format(Sys.Date(), "%Y_%m_%d"), 
+                            ".tsv.gz"))
+write_tsv(mdata_out, outname)
+
+saveRDS(so,
+        file.path("objects",
+                  "mouse_models",
+                  "mb_models_sobj.rds"))
+```
+
+
+## Combine datasets 
+
+
+```{r}
+so <- readRDS(file.path("objects", "mouse_models", "mb_models_sobj.rds"))
+so2 <- readRDS(file.path("objects", "mouse_models", "shh_model_sobj.rds"))
+
+
+so <- merge(so, so2)
+
+so <- NormalizeData(so, verbose = FALSE)
+
+so <- FindVariableFeatures(so, 
+                           selection.method = "vst", 
+                           nfeatures = 3000, 
+                           verbose = FALSE)
+
+so <- ScaleData(so, 
+                #vars.to.regress = c("percent.mt", "nCount_RNA"), 
+                verbose = TRUE)
+
+so <- RunPCA(so, npcs = 40, verbose = FALSE)
+
+ElbowPlot(so, ndims = 40)
+
+so <- FindNeighbors(so, 
+                    reduction = "pca", 
+                    dims = 1:30)
+
+so <- RunUMAP(so, 
+              graph = "RNA_snn", 
+              min.dist = 0.3
+)
+
+
+plts <- list()
+plts[[1]] <- plot_umap(so, "orig.ident") + labs(title = "All samples")
+plts[[2]] <- plot_umap(so, "cell_types") + labs(title = "All samples")
+plts[3:8] <- plot_features_split(so, "cell_types", "orig.ident", embedding = "umap", add_title = TRUE)
+
+p <- plot_grid(plotlist = plts, nrow = 2, ncol = 4)
+p
+
+
+saveRDS(so, file.path("objects", "mouse_models", "combined.rds"))
+```
+
+```{r}
+so_m <- readRDS(file.path("objects", "mouse_models", "combined.rds"))
+
+
+to_plot <- c(
+  "orig.ident",
+  "cell_types"
+)
+plt <- map(to_plot,
+            ~plot_umap(so_m, .x)) %>% 
+  plot_grid(plotlist = ., nrow = 1, ncol = 2,
+            rel_widths = c(1, 1.2))
+
+outdir <- "figs/mouse_models"
+dir.create(outdir, showWarnings = FALSE)
+
+save_plot(file.path(outdir, "umap_overview.pdf"),
+          plt,
+          nrow = 1, ncol = 2, base_asp = 1.2)
+
+
+```
+
+
+# Determine how well the mouse models aligns with human MB
+
+
+
+Do some data wranging to generate seurat objects with 1-to-1 mouse and human orthologs named with Human gene ids. 
+
+
+```{r load_dat}
+so_h <- readRDS(file.path("objects", "so.rds"))
+so_m <- readRDS(file.path("objects", "mouse_models", "combined.rds"))
+
+# subset human model to malignant cells
+malignant_cells <- colnames(so_h)[so_h$coarse_cell_type == "malignant"]
+so_h <- so_h[, malignant_cells]
+
+# subset mouse model to malignant cells
+malignant_cells <- colnames(so_m)[so_m$cell_types == "malignant"]
+so_m <- so_m[, malignant_cells]
+
+# use shared genes based on ortholog table
+
+# get 1-to-1 orthologs
+orthologs <- orthologs %>% 
+  na.omit() %>% 
+  group_by(external_gene_name) %>% 
+  mutate(n_mouse_orthologs = n()) %>%
+  ungroup() %>% 
+  group_by(mmusculus_homolog_associated_gene_name) %>% 
+  mutate(n_human_orthologs = n()) %>% 
+  ungroup() %>% 
+  filter(n_mouse_orthologs == 1,
+         n_human_orthologs == 1)
+
+count_mat <- so_m@assays$RNA@counts
+norm_mat <- so_m@assays$RNA@data
+
+new_gids <- left_join(tibble(genes = rownames(count_mat)),
+                      orthologs, 
+                      by = c("genes" = "mmusculus_homolog_associated_gene_name"))
+  
+
+genes_to_keep <- which(!is.na(new_gids$external_gene_name))
+
+count_mat <- count_mat[genes_to_keep, ]
+norm_mat <- norm_mat[genes_to_keep, ]
+
+rownames(count_mat) <-new_gids$external_gene_name[genes_to_keep]
+rownames(norm_mat) <- new_gids$external_gene_name[genes_to_keep]
+
+so_m <- CreateSeuratObject(count_mat, 
+                   meta.data = so_m@meta.data)
+
+so_m <- SetAssayData(so_m, "data", new.data = norm_mat)
+
+shared_ids <- intersect(rownames(so_m), rownames(so_h))
+
+so_m <- so_m[shared_ids, ]
+so_h <- so_h[shared_ids, ]
+
+so_m$subgroup <- "mouse_model"
+so_m$species <- "mouse"
+so_h$species <- "human"
+
+sos <- list(mouse_mb = so_m, human_mb = so_h)
+```
+
+
+```{r}
+for (i in 1:length(sos)) {
+    sos[[i]] <- NormalizeData(sos[[i]], verbose = FALSE)
+    sos[[i]] <- FindVariableFeatures(sos[[i]], selection.method = "vst", 
+        nfeatures = 2000, verbose = FALSE)
+}
+
+features <- SelectIntegrationFeatures(sos)
+
+sos <- lapply(sos, FUN = function(x) {
+    x <- ScaleData(x, features = features, verbose = FALSE)
+    x <- RunPCA(x, features = features, verbose = FALSE)
+})
+
+```
+
+Trying using reciprocal PCA approach for dataset integeration using develop version of seurat. 
+
+```{r}
+anchors <- FindIntegrationAnchors(sos, 
+                                  reduction = "rpca", 
+                                  dims = 1:30)
+
+sos_integrated <- IntegrateData(anchors, 
+                                dims = 1:30)
+```
+
+
+```{r}
+sos_integrated <- ScaleData(sos_integrated, verbose = FALSE)
+sos_integrated <- RunPCA(sos_integrated, verbose = FALSE)
+sos_integrated <- RunUMAP(sos_integrated, dims = 1:30)
+
+DimPlot(sos_integrated, group.by = "orig.ident")
+
+sos_integrated$tumor_type <- ifelse(sos_integrated$species == "mouse",
+                                    str_c("mouse_", sos_integrated$orig.ident),
+                                    str_c("human_", sos_integrated$subgroup, "_", sos_integrated$UPN))
+
+DimPlot(sos_integrated, group.by = "tumor_type")
+
+Idents(sos_integrated) <- "tumor_type"
+sos_integrated <- BuildClusterTree(sos_integrated, dims = 1:30)
+
+PlotClusterTree(sos_integrated)
+saveRDS(sos_integrated, "objects/mouse_models/mouse_human_int.rds")
+```
+
+
+```{r}
+so_int <- readRDS("objects/mouse_models/mouse_human_int.rds")
+DimPlot(so_int, group.by = "tumor_type")
+
+plt <- plot_umap(so_int, "tumor_type")
+
+save_plot("figs/mouse_models/mouse_model_with_human_integrated.pdf", 
+          plt, 
+          base_asp = 1.5)
+
+Idents(so_int) <- "tumor_type"
+so_int <- BuildClusterTree(so_int, dims = 1:30)
+
+avg_expr_tt <- AverageExpression(so_int)
+
+library(ComplexHeatmap)
+Heatmap(cor(avg_expr_tt$RNA))
+
+PlotClusterTree(so_int)
+
+
+so_int$tumor_type_id <- ifelse(so_int$species == "mouse",
+                                    str_c("mouse_", so_int$orig.ident),
+                                    str_c("human_", so_int$subgroup, "_", so_int$UPN))
+
+Idents(so_int) <- "tumor_type_id"
+so_int <- BuildClusterTree(so_int, assay = "RNA")
+
+PlotClusterTree(so_int,
+                     show.node.label = FALSE, 
+                     show.tip.label = TRUE)
+
+
+avg_expr <- AverageExpression(so_int)
+
+library(ComplexHeatmap)
+Heatmap(cor(avg_expr$RNA))
+```
+Just merge without integration and plot
+
+```{r}
+so_merged <- merge(sos$human_mb, sos$mouse_mb, merge.data = FALSE)
+so_merged <- NormalizeData(so_merged, verbose = FALSE)
+so_merged <-
+    FindVariableFeatures(
+        so_merged,
+        selection.method = "vst",
+        nfeatures = 2000,
+        verbose = FALSE
+    )
+so_merged <-
+    ScaleData(so_merged,
+              features = VariableFeatures(so_merged),
+              verbose = FALSE)
+so_merged <-
+    RunPCA(so_merged,
+           features = VariableFeatures(so_merged),
+           verbose = FALSE)
+so_merged <- RunUMAP(so_merged, dims = 1:30)
+
+DimPlot(so_merged, group.by = "subgroup")
+
+plt <- plot_umap(so_merged, "subgroup")
+
+save_plot("figs/mouse_models/mouse_model_with_human.pdf", plt, base_asp = 1.5)
+```
+

@@ -1,0 +1,1032 @@
+---
+title: "Overview"
+author: "Kent Riemondy RBI"
+date: "8/22/2019"
+output: html_document
+---
+
+```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
+source("../R/utils.R")
+library(future)
+plan(strategy = "multicore", workers = 6)
+options(future.globals.maxSize = 2 * 1024 ^ 3)
+
+proj_dir <- here()
+data_dir <- file.path(proj_dir, "data", "cellranger", "results")
+doc_dir <- file.path(proj_dir, "docs")
+
+fig_dir <- "figs"
+mkrs_dir <- "markers"
+tbls_dir <- "tables"
+walk(c(fig_dir, mkrs_dir, tbls_dir), dir.create, showWarnings = F)
+
+library(ComplexHeatmap)
+library(dendextend)
+```
+
+## Read object
+```{r}
+so <- readRDS(file.path("objects", "so.rds"))
+```
+
+
+## Make overview umaps
+
+### Subgroup
+
+```{r}
+p <- plot_umap(so, "subgroup", .cols = palette_OkabeIto) 
+
+save_plot(file.path(fig_dir, "umap_by_subgroup.pdf"),
+          p, 
+          base_asp = 1.4)
+```
+
+### UPN
+
+```{r}
+p <- plot_umap(so, "UPN") + 
+  theme( legend.text = element_text(size = 8))
+
+save_plot(file.path(fig_dir, "umap_by_UPN.pdf"),
+          p, 
+          base_asp = 1.4)
+```
+
+### coarse clusters
+
+```{r}
+p <- plot_umap(so, "coarse_clusters") + 
+  theme( legend.text = element_text(size = 6))
+
+save_plot(file.path(fig_dir, "umap_by_cluster.pdf"),
+          p, 
+          base_asp = 1.4)
+```
+
+### coarse cell type
+
+```{r}
+coarse_cell_type_pretty_id <- c("Neoplastic",
+                               "Lymphocytes",
+                               "Glia",
+                               "Monocytes")
+
+names(coarse_cell_type_pretty_id) <- c("malignant",
+                               "lymphocytes",
+                               "oligodendrocytes_astrocytes_other",
+                               "macrophage_monocytes")
+
+p <- plot_umap(so, "coarse_cell_type") +
+  scale_color_manual(values = palette_OkabeIto, 
+                      breaks = names(coarse_cell_type_pretty_id), 
+                      labels = coarse_cell_type_pretty_id)
+
+save_plot(file.path(fig_dir, "umap_by_coarse_cell_type.pdf"),
+          p, 
+          base_asp = 1.4)
+```
+
+## Plot cell distibutions per subgroup and tumor
+
+
+
+```{r}
+subgroup_pretty_id <- factor(c())
+sc_mdata <- so@meta.data %>% 
+  rownames_to_column("cell")
+
+per_patient <- sc_mdata %>% 
+  mutate(simple_id = coarse_cell_type_pretty_id[coarse_cell_type]) %>% 
+  group_by(UPN) %>%
+  mutate(n_cells = n()) %>% 
+  group_by(UPN, simple_id) %>% 
+  summarize(n = n(),
+            prop_cell_type = n / unique(n_cells),
+            subgroup = unique(subgroup))
+
+p <- ggplot(per_patient, 
+       aes(UPN, prop_cell_type)) +
+  geom_col(aes(fill = simple_id)) +
+  labs(x = "Tumor ID",
+       y = "Proportion of each cell type") +
+  scale_fill_manual(values = rev(palette_OkabeIto[1:4]), 
+                    name = "") + 
+  facet_grid(~subgroup, scales = "free_x", space = "free_x") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        legend.position = "top",
+        strip.background = element_rect(fill = "white"))
+p
+
+save_plot(file.path(fig_dir, "cell_types_per_tumor.pdf"), 
+          p,
+          base_width = 7,
+          base_aspect_ratio = 1.5)
+```
+
+
+
+## infer CNV figures
+
+run on server per subgroup. Consider replotting heatmaps with better visualizations. 
+
+```{r, eval = FALSE}
+# to do...
+
+```
+
+## Subtypes based on Cavalli paper
+
+```{r}
+so <- readRDS(file.path("objects", "all_neoplastic.rds"))
+
+p <- plot_umap(so, "subgroup", .cols = palette_OkabeIto) 
+p
+save_plot(file.path(fig_dir, "umap_neoplastic_by_subgroup.pdf"),
+          p, 
+          base_asp = 1.2)
+
+
+subtype_pal <- c(
+  brewer.pal(4, "Blues")[2:4],
+  brewer.pal(4, "Greens")[2:4],
+  brewer.pal(4, "Reds")[c(2,4)]
+)
+p <- plot_umap(so, "subtype", .cols = subtype_pal) 
+p
+save_plot(file.path(fig_dir, "umap_neoplastic_by_subtype.pdf"),
+          p, 
+          base_asp = 1.5)
+
+
+p <- plot_umap(so, "UPN") +
+  theme( legend.text = element_text(size = 8))
+
+save_plot(file.path(fig_dir, "umap_neoplastic_by_UPN.pdf"),
+          p, 
+          base_asp = 1.4)
+```
+
+## SHH tumors
+
+### Various genes in SHH
+
+
+```{r}
+famous_genes <- c(
+  "MYCN",
+  "GLI2",
+  "SOX2",
+  "BOC"
+)
+
+plts <- map(famous_genes,
+    ~plot_umap(so, .x, minimal_theme = TRUE))
+
+names(plts) <- famous_genes
+
+plot_grid(plotlist = plts)
+
+iwalk(plts,
+     ~save_plot(file.path(fig_dir, 
+                          paste0("umap_neoplastic_by_", .y, ".pdf")),
+          .x, 
+          base_asp = 1.2))
+```
+
+
+### Harmonized projection
+
+Using alignment techniques generates marker gene lists that are prettty similar to those seen by NMF/scHPF. Also produces easier to digest visualizations via UMAP rather than heatmaps.
+
+```{r}
+so <- readRDS(file.path("objects", "shh.rds"))
+
+p <- plot_feature(so, 
+             "coarse_clusters_shh_harmony", 
+             embedding = "umap_harmony", 
+             label_color = "black", 
+             label_text = TRUE)
+
+save_plot(file.path(fig_dir, "umap_shh_by_clusters.pdf"),
+          p, 
+          base_asp = 1.4)
+
+p <- plot_feature(so, 
+             "UPN", 
+             embedding = "umap_harmony")
+
+save_plot(file.path(fig_dir, "umap_shh_by_upn.pdf"),
+          p, 
+          base_asp = 1.4)
+
+p <- plot_feature(so, 
+             "Phase", 
+             embedding = "umap_harmony",
+             .cols = palette_OkabeIto)
+
+save_plot(file.path(fig_dir, "umap_shh_by_cc_phase.pdf"),
+          p, 
+          base_asp = 1.4)
+
+p <- plot_feature(so, 
+             "subtype", 
+             embedding = "umap_harmony",
+             .cols = palette_OkabeIto) +
+  scale_color_manual(values = palette_OkabeIto, 
+                     drop = TRUE)
+
+save_plot(file.path(fig_dir, "umap_shh_by_subtype.pdf"),
+          p, 
+          base_asp = 1.5)
+
+```
+
+### harmony cluster markers
+
+```{r fig.height = 6}
+mkrs <- read_tsv(file.path(mkrs_dir, "harmony_markers_shh.tsv"))
+
+topx <- mkrs %>% 
+  arrange(p_val_adj) %>% 
+  group_by(cluster) %>% 
+  slice(1:10) 
+
+p <- DotPlot(so, 
+        features = unique(topx$gene),
+        cols = "Spectral",
+        group.by = "coarse_clusters_shh_harmony") +
+  coord_flip() +
+  labs(y = "Cluster",
+       x = "") +
+  theme(axis.text.x = element_text(size = 24),
+        axis.text.y = element_text(size = 12),
+        axis.title.x = element_text(size = 24))
+
+p
+
+save_plot(file.path(fig_dir, 
+                    "dotplot_shh_markers.pdf"), 
+          p, base_height = 12, base_asp = 1)
+
+
+```
+
+### Northcutt metaprograms
+
+Predict that Harmony + cluster ~= NMF per sample + clustering.
+
+Yep. 
+
+```{r}
+shh_mps <- c(
+  "SHH-A_metafactor1",
+  "SHH-B_metafactor1",
+  "SHH-C_metafactor1"
+)
+names(shh_mps) <- paste0("Hovestadt_et_al_", "SHH-", c("A", "B", "C"))
+
+plts <- imap(shh_mps,
+            ~plot_feature(so, 
+               .x, 
+               embedding = "umap_harmony", 
+               show_negative = TRUE,
+               minimal_theme = TRUE) + 
+              labs(title = .y))
+
+iwalk(plts, 
+    ~save_plot(file.path(fig_dir, 
+                         paste0("umap_shh_by_", .y, ".pdf")),
+          .x, 
+          base_asp = 1.4))
+
+```
+
+### plot putative stem markers from mouse SHH Cancel cell paper
+
+Most of the tSNE plots show really sparse and low expression of these genes. Not sure how reliable those finding are. 
+
+```{r}
+stem_mkrs <- c(
+  "PROM1",
+  "SOX2",
+  "OLIG1",
+  "OLIG2",
+  "NES",
+  "HES1",
+  "MYCN",
+  "BOC",
+  "GLI2"
+)
+
+plts <- map(stem_mkrs,
+            ~plot_feature(so, 
+               .x, 
+               embedding = "umap_harmony", 
+               minimal_theme = TRUE) )
+names(plts) <- stem_mkrs
+iwalk(plts, 
+    ~save_plot(file.path(fig_dir, 
+                         paste0("umap_shh_by_", .y, ".pdf")),
+          .x, 
+          base_asp = 1.4))
+```
+
+
+
+
+## GP3 and GP 4 tumors
+
+### Various marker genes for Gp3 and Gp4
+
+
+```{r}
+famous_genes <- c(
+  "MYCN",
+  "GLI2",
+  "SOX2",
+  "BOC"
+)
+
+plts <- map(famous_genes,
+    ~plot_umap(so, .x, minimal_theme = TRUE))
+
+names(plts) <- famous_genes
+
+plot_grid(plotlist = plts)
+
+iwalk(plts,
+     ~save_plot(file.path(fig_dir, 
+                          paste0("umap_neoplastic_by_", .y, ".pdf")),
+          .x, 
+          base_asp = 1.2))
+```
+
+
+### Harmonized projection
+
+Using alignment techniques generates marker gene lists that are prettty similar to those seen by NMF/scHPF. Also produces easier to digest visualizations via UMAP rather than heatmaps.
+
+```{r}
+so <- readRDS(file.path("objects", "gp34.rds"))
+
+p <- plot_feature(so, 
+             "coarse_clusters_gp34_harmony", 
+             embedding = "umap_harmony", 
+             label_color = "black", 
+             label_text = TRUE) +
+  labs(x = "UMAP 1",
+       y = "UMAP 2")
+
+save_plot(file.path(fig_dir, "umap_gp34_by_clusters.pdf"),
+          p, 
+          base_asp = 1.4)
+
+p <- plot_feature(so, 
+             "UPN", 
+             embedding = "umap_harmony") +
+  labs(x = "UMAP 1",
+       y = "UMAP 2")
+
+save_plot(file.path(fig_dir, "umap_gp34_by_upn.pdf"),
+          p, 
+          base_asp = 1.4)
+
+p <- plot_feature(so, 
+             "Phase", 
+             embedding = "umap_harmony",
+             .cols = palette_OkabeIto) +
+  labs(x = "UMAP 1",
+       y = "UMAP 2")
+
+save_plot(file.path(fig_dir, "umap_gp34_by_cc_phase.pdf"),
+          p, 
+          base_asp = 1.4)
+
+p <- plot_feature(so, 
+             "subtype", 
+             embedding = "umap_harmony",
+             .cols = palette_OkabeIto) +
+  scale_color_manual(values = palette_OkabeIto, 
+                     drop = TRUE) +
+  labs(x = "UMAP 1",
+       y = "UMAP 2")
+
+save_plot(file.path(fig_dir, "umap_gp34_by_subtype.pdf"),
+          p, 
+          base_asp = 1.5)
+
+```
+
+### harmony cluster markers
+
+```{r fig.height = 6}
+mkrs <- read_tsv(file.path(mkrs_dir, "harmony_markers_gp34.tsv"))
+
+topx <- mkrs %>% 
+  arrange(p_val_adj) %>% 
+  group_by(cluster) %>% 
+  slice(1:10) 
+
+p <- DotPlot(so, 
+        features = unique(topx$gene),
+        cols = "Spectral",
+        group.by = "coarse_clusters_gp34_harmony") +
+  coord_flip() +
+  labs(y = "Cluster",
+       x = "") +
+  theme(axis.text.x = element_text(size = 24),
+        axis.text.y = element_text(size = 12),
+        axis.title.x = element_text(size = 24))
+
+p
+
+save_plot(file.path(fig_dir, 
+                    "dotplot_gp34_markers.pdf"), 
+          p, base_height = 12, base_asp = 0.75)
+
+
+```
+
+### Northcutt metaprograms
+
+
+```{r}
+shh_mps <- c(
+  "Group 3/4-A_metafactor1",
+  "Group 3/4-B_metafactor1",
+  "Group 3/4-C_metafactor1"
+)
+names(shh_mps) <- paste0("Hovestadt_et_al_", "Group 3 and 4-", c("A", "B", "C"))
+
+plts <- imap(shh_mps,
+            ~plot_feature(so, 
+               .x, 
+               embedding = "umap_harmony", 
+               show_negative = TRUE,
+               minimal_theme = TRUE) + 
+              labs(title = .y))
+
+iwalk(plts, 
+    ~save_plot(file.path(fig_dir, 
+                         paste0("umap_gp34_by_", .y, ".pdf")),
+          .x, 
+          base_asp = 1.4))
+
+```
+
+### plot putative stem markers from mouse SHH Cancel cell paper
+
+Most of the tSNE plots show really sparse and low expression of these genes. Not sure how reliable those finding are. 
+
+```{r}
+stem_mkrs <- c(
+  "PROM1",
+  "SOX2",
+  "OLIG1",
+  "OLIG2",
+  "NES",
+  "HES1",
+  "MYCN",
+  "BOC",
+  "GLI2"
+)
+
+plts <- map(stem_mkrs,
+            ~plot_feature(so, 
+               .x, 
+               embedding = "umap_harmony", 
+               minimal_theme = TRUE) )
+names(plts) <- stem_mkrs
+iwalk(plts, 
+    ~save_plot(file.path(fig_dir, 
+                         paste0("umap_gp34_by_", .y, ".pdf")),
+          .x, 
+          base_asp = 1.4))
+```
+
+
+
+
+
+## Examine factorization approaches
+
+## scHPF
+```{r, eval = FALSE}
+library(rtracklayer)
+# need ensembl ids and suggest keeping only protein coding
+
+gtf_fn <- "../dbases/genes.gtf"
+symbol2id <- import(gtf_fn) %>% 
+  as.data.frame() 
+
+symbol2id <- symbol2id %>% 
+  select(gene_id, gene_name, gene_biotype) %>% 
+  unique() %>% 
+  filter(gene_biotype == "protein_coding")
+
+so <- readRDS(file.path("objects", "so.rds"))
+
+count_mat <- GetAssayData(so, "counts")
+
+count_mat <- count_mat[, colnames(so)]
+
+# keep genes expressed in at least 0.1%
+to_keep_genes <- rowSums(count_mat > 0) > (ncol(count_mat) * 0.001)
+
+count_mat <- count_mat[to_keep_genes, ]
+
+# keep only protein coding
+
+count_mat <- count_mat[which(rownames(count_mat) %in% symbol2id$gene_name), ]
+
+count_mat <- as.data.frame(as.matrix(count_mat))
+
+# add in ensembl ids
+count_mat <- tibble::rownames_to_column(count_mat, "gene")
+count_mat <- left_join(count_mat, symbol2id, by = c("gene" = "gene_name"))
+count_mat <- select(count_mat, gene_id, gene, -gene_biotype, everything())
+
+```
+
+```{r, eval = FALSE}
+# subset to single tumors to run
+
+upns <- unique(as.character(so$UPN))
+outdir <- file.path("tables", "schpf")
+
+dir.create(outdir, showWarnings = FALSE)
+walk(upns,
+     function(upn){
+       cells_to_keep <- colnames(so)[so$UPN == upn & so$coarse_cell_type == "malignant"]
+       
+       out_mat <- count_mat[, c("gene_id", "gene", cells_to_keep)]
+       
+       dir.create(file.path(outdir, upn), 
+                  showWarnings = FALSE)
+       # add ensembl id to first col, then gene, then counts
+       write_tsv(out_mat,
+                file.path(outdir, upn, "count_matrix.tsv"),
+                 col_names = FALSE)
+})
+
+rm(count_mat)
+
+Sys.setenv(SAMPLES = paste0(file.path(outdir, upns),
+                            collapse = " "))
+```
+
+
+
+
+```{bash, eval = FALSE}
+eval "$(/miniconda3/condabin/conda shell.bash hook)"
+conda activate schpf_p37
+
+for i in $SAMPLES
+do echo $i
+bn=$(basename $i)
+#scHPF prep -i $i"/count_matrix.tsv" -o $i -m 5 
+#scHPF train -i $i"/train.mtx" -o $i -k 5 -t 5 
+scHPF score -m $i/"scHPF_K5_epsilon0.001_5trials.joblib" \
+            -o $i \
+            -p $bn".k5" \
+            -g $i/"genes.txt"
+
+done
+
+
+for i in $SAMPLES
+do echo $i
+bn=$(basename $i)
+#scHPF prep -i $i"/count_matrix.tsv" -o $i -m 5 
+scHPF train -i $i"/train.mtx" -o $i -k 4 -t 5 
+scHPF score -m $i/"scHPF_K4_epsilon0.001_5trials.joblib" \
+            -o $i \
+            -p $bn".k4" \
+            -g $i/"genes.txt"
+
+done
+
+for i in $SAMPLES
+do echo $i
+bn=$(basename $i)
+#scHPF prep -i $i"/count_matrix.tsv" -o $i -m 5 
+scHPF train -i $i"/train.mtx" -o $i -k 3 -t 5 
+scHPF score -m $i/"scHPF_K3_epsilon0.001_5trials.joblib" \
+            -o $i \
+            -p $bn".k3" \
+            -g $i/"genes.txt"
+
+done
+
+```
+
+### Metafactors
+
+```{r}
+upns <- unique(as.character(so$UPN))
+outdir <- file.path("tables", "schpf")
+
+k_val <- 3
+
+files <- file.path(outdir, 
+                   upns, 
+                   paste0( upns,
+                           ".k", k_val, ".ranked_genes.txt"))
+
+ranked_genes <- map(files, read_tsv, col_names = paste0("factor_", 1:k_val))
+names(ranked_genes) <-  upns
+
+# get gene scores 
+gs_files <- file.path(outdir, 
+                   upns, 
+                   paste0(upns,
+                          ".k", k_val, ".gene_score.txt"))
+
+gene_id_files <- file.path(outdir, 
+                   upns, 
+                   "genes.txt")
+  
+# make simple ids for cols
+mdata <- so@meta.data %>% 
+  dplyr::select(UPN, subgroup) %>% 
+  unique() %>% 
+  mutate(id = str_c(UPN, "_", subgroup)) %>% 
+  mutate_if(is.factor, as.character)
+
+ids <- mdata$id
+names(ids) <- mdata$UPN
+
+gs_dat <- pmap(list(gs_files,
+               gene_id_files,
+                upns),
+               function(x, y, z){
+  gs_df <- read_tsv(x, col_names = str_c("m_", ids[z], "_factor_", 1:k_val)) %>% 
+    as.data.frame()
+  genes <- read_tsv(y, col_names = c("ens_id", "gene_name"))
+  # make unique to match seurat handling of duplicate gene names
+  gs_df$gene <- make.unique(genes$gene_name)
+  gs_df
+  })
+
+names(gs_dat) <- upns
+```
+
+```{r}
+correlate_metaprograms <- function(gene_scores_list,
+                             ranked_genes_list,
+                             n_genes = 50,
+                             k_clusters = 5) {
+  topx_union <- map(ranked_genes_list,
+                    function(x) {
+                      # get top and bottom 50
+                      n <- nrow(x)
+                      top_n_bottom <- x[c(1:n_genes, ((n - n_genes - 1):n)),]
+                      unname(unlist(top_n_bottom))
+                    }) %>%
+    unlist(.) %>%
+    unique(.)
+  
+  # merge all factors
+  gs_dat_merged <- map(
+    gene_scores_list,
+    ~ left_join(tibble(gene = topx_union),
+                .x,
+                by = "gene") %>%
+      as.data.frame(.) %>%
+      column_to_rownames("gene")
+  ) %>%
+    unname() %>% 
+    do.call(cbind, .) %>%
+    na.omit(.) %>%
+    as.matrix(.)
+  
+  
+  factor_cor <- cor(gs_dat_merged,
+                    method = "pearson")
+  
+  hc <- hclust(dist(factor_cor),
+               method = "ward.D2")
+  
+  hc <- as.dendrogram(hc)
+  hc_order <- order.dendrogram(hc)
+  clusts <- dendextend::cutree(hc, k = k_clusters)
+  clusts <- clusts[hc_order]
+  hc <- color_branches(hc, clusters = clusts, groupLabels = TRUE)
+  
+  
+  annot_df <- data.frame(
+    row.names = colnames(factor_cor),
+    subgroup = str_split(colnames(factor_cor),
+                         "_",
+                         simplify = TRUE) %>% .[, 3],
+    meta_factors = clusts[colnames(factor_cor)]
+  )
+  
+  cols <-  discrete_palette_default[unique(annot_df$subgroup)]
+  names(cols) <- levels(annot_df$subgroup)
+  
+  factor_cols <- RColorBrewer::brewer.pal(k_clusters, "Set1")
+  names(factor_cols) <- unique(clusts)
+  
+  column_ha <- HeatmapAnnotation(df = annot_df,
+                                 col = list(subgroup = cols,
+                                            meta_factors = factor_cols))
+  
+  hm <- Heatmap(
+    factor_cor,
+    col = viridis::viridis(256),
+    cluster_columns = hc,
+    cluster_rows = hc,
+    show_column_dend = FALSE,
+    bottom_annotation = column_ha
+  )
+  
+  list(factor_df = gs_dat_merged,
+       clusters = clusts,
+       heatmap = hm)
+}
+```
+
+
+```{r}
+merge_metaprograms <- function(clusters,
+                               factor_df) {
+  
+  meta_factors <- sapply(split(clusters, clusters),
+                         function(clust) {
+                           f_ids <- names(clust)
+                           mat <- factor_df[, f_ids]
+                           f_means <- rowMeans(mat, na.rm = TRUE)
+                           f_means
+                         })
+  
+  g_ids <- rownames(meta_factors)
+  ranked_genes <- apply(meta_factors, 2, function(x) {
+    g_ids[order(x, decreasing = TRUE)]
+  }) %>%
+    as.data.frame(stringsAsFactors = FALSE)
+  
+  list(ranked_genes= ranked_genes,
+       meta_factors = meta_factors)
+}
+
+```
+
+
+```{r}
+mp <- correlate_metaprograms(gs_dat, 
+                             ranked_genes,
+                             n_genes = 50, 
+                             k_clusters = 4)
+
+print(mp$heatmap)
+
+pdf("figs/schpf_k4_meta_module_clustering.pdf", width = 8, height = 8)
+print(mp$heatmap)
+dev.off()
+```
+
+```{r}
+metaprog <- merge_metaprograms(mp$clusters, mp$factor_df)
+metaprog$ranked_genes[1:10, ]
+```
+
+Identify meta factors
+
+```{r}
+
+for (i in 1:ncol(metaprog$ranked_genes)){
+  
+  so <- AddModuleScore(so, 
+                       features = list(c(metaprog$ranked_genes[1:50, i, drop = TRUE])),
+                       ctrl = 50,
+                       name = str_c("MB_metafactor_", i, "_"),
+                       seed = i)
+}
+
+plt <- map(str_c("MB_metafactor_", 1:ncol(metaprog$ranked_genes), "_1"),
+    ~plot_umap(so, .x, show_negative = TRUE)) %>% 
+  plot_grid(plotlist = ., nrow = 2, ncol = 2)
+
+
+save_plot("figs/schpf_mb_mp.pdf", plt, nrow = 2, ncol = 3, base_asp = 1.2)
+```
+
+### Parse out by subgroup
+
+### SHH
+
+
+```{r}
+
+shh_ids <- filter(mdata, subgroup == "SHH") %>% 
+  pull(UPN) %>% 
+  as.character()
+
+shh_mp <- correlate_metaprograms(gene_scores_list = gs_dat[shh_ids],  
+                                ranked_genes_list = ranked_genes[shh_ids], 
+                                n_genes = 50, 
+                                k_clusters = 3)
+
+print(shh_mp$heatmap)
+```
+
+```{r}
+shh_metaprog <- merge_metaprograms(shh_mp$clusters, shh_mp$factor_df)
+shh_metaprog$ranked_genes %>% View()
+```
+
+
+```{r}
+
+for (i in 1:ncol(shh_metaprog$ranked_genes)){
+  
+  so <- AddModuleScore(so, 
+                       features = list(c(shh_metaprog$ranked_genes[1:50, i, drop = TRUE])),
+                       ctrl = 50,
+                       name = str_c("SHH_metafactor_", i, "_"),
+                       seed = i)
+}
+
+map(str_c("SHH_metafactor_", 1:ncol(shh_metaprog$ranked_genes), "_1"),
+    ~plot_umap(so, .x, show_negative = TRUE)) %>% 
+  plot_grid(plotlist = ., nrow = 3, ncol = 2)
+
+```
+
+### Group 3, 3/4, 4
+
+```{r}
+
+gp34_ids <- filter(mdata, subgroup != "SHH") %>% pull(UPN) %>% as.character()
+
+gp34_mp <- correlate_metaprograms(gene_scores_list = gs_dat[gp34_ids],  
+                                ranked_genes_list = ranked_genes[gp34_ids], 
+                                n_genes = 100, k_clusters = 3)
+
+print(gp34_mp$heatmap)
+```
+
+```{r}
+gp34_metaprog <- merge_metaprograms(gp34_mp$clusters, gp34_mp$factor_df)
+gp34_metaprog$ranked_genes
+```
+
+
+```{r}
+
+for (i in 1:ncol(gp34_metaprog$ranked_genes)){
+  
+  so <- AddModuleScore(so, 
+                       features = list(c(gp34_metaprog$ranked_genes[1:50, i, drop = TRUE])),
+                       ctrl = 50,
+                       name = str_c("GP34_metafactor_", i, "_"),
+                       seed = i)
+}
+
+map(str_c("GP34_metafactor_",
+          1:ncol(gp34_metaprog$ranked_genes), 
+          "_1"),
+    ~plot_umap(so, 
+               .x, 
+               show_negative = TRUE)) %>% 
+  plot_grid(plotlist = ., 
+            nrow = 3,
+            ncol = 2)
+
+```
+
+
+## Northcutt metaprograms
+
+```{r}
+supp_tbl_2 <- "https://static-content.springer.com/esm/art%3A10.1038%2Fs41586-019-1434-6/MediaObjects/41586_2019_1434_MOESM3_ESM.xlsx"
+
+
+download.file(supp_tbl_2, "../docs/northcutt_sup_tbl_2.xlsx")
+sup_tbl <- read_excel("../docs/northcutt_sup_tbl_2.xlsx", 
+           sheet = 2,
+           skip = 3) 
+
+sup_tbl[, 1] <- NULL
+
+# extract out each metaprogram following their approach of excluding ribosomal
+# and protein genes and non-coding RNAs
+
+mps <- map(seq(1, ncol(sup_tbl), 2), 
+    ~c(.x, .x + 1)) %>% 
+  map(., ~sup_tbl[, .x] 
+      %>% na.omit()) 
+
+mp_names <- map_chr(mps, ~colnames(.x)[2])
+mps <- map(mps, ~.x[, 2, drop = TRUE]) 
+names(mps) <- mp_names
+
+
+for (i in seq_along(mps)){
+  
+  so <- AddModuleScore(so, 
+                       features = list(c(mps[[i]])),
+                       ctrl = 50,
+                       name = str_c( names(mps)[i], "_metafactor"),
+                       seed = 42)
+}
+
+so@meta.data %>% 
+  filter(coarse_cell_type == "malignant") %>% 
+  dplyr::select(contains("metafactor")) %>% 
+  as.data.frame() %>%
+  as.matrix(.) %>% 
+  Heatmap(cor(.))
+
+```
+
+
+Add hypoxia gene signature from molSigDb
+```{r}
+download.file("http://software.broadinstitute.org/gsea/msigdb/download_geneset.jsp?geneSetName=HALLMARK_HYPOXIA&fileType=txt",
+              "../docs/hypoxia_gene_signatures.tsv")
+
+hyp_genes <- read_lines("../docs/hypoxia_gene_signatures.tsv", skip = 2)
+
+so <- AddModuleScore(
+  so,
+  features = list(c(hyp_genes)),
+  ctrl = 50,
+  name = "Hypoxia_signatures",
+  seed = 42
+)
+
+plt <- plot_umap(so, "Hypoxia_signatures1", show_negative = TRUE)
+save_plot("figs/hypoxia_mp.pdf", plt, base_asp = 1.5)
+```
+
+
+### 
+
+```{r}
+so@meta.data %>% 
+  filter(coarse_cell_type == "malignant",
+         subgroup == "GP4") %>% 
+  select(orig.ident, contains("metafactor")) %>% 
+  gather(mf, value, -orig.ident) %>%
+  group_by(orig.ident, mf) %>% 
+  summarize(mf_med = median(value)) %>% 
+  spread(mf, mf_med) %>%
+  as.data.frame() %>%
+  column_to_rownames("orig.ident") %>%
+  as.matrix(.) %>% 
+  Heatmap(.)
+
+```
+
+
+## Pseudotime/Trajectory inference
+
+```{r}
+library(slingshot)
+so <- subset(so, subset = subgroup == "SHH")
+so <- subset(so, subset = coarse_cell_type == "malignant")
+
+so <- FindVariableFeatures(so)
+so <- ScaleData(so, features = VariableFeatures(so))
+so <- RunPCA(so)
+so <- RunUMAP(so, dims = 1:20)
+so <- FindNeighbors(so)
+so <- FindClusters(so)
+so <- CellCycleScoring(so,
+                       cc.genes$s.genes,
+                       cc.genes$g2m.genes)
+
+markers <- c(
+  "MYC",
+  "ZIC1",
+  "EEF1A1",
+  "TOP2A"
+)
+
+map(markers, ~plot_umap(so, .x))
+map(markers, ~plot_pca(so, .x))
+
+plot_pca(so, "seurat_clusters")
+
+
+sce <- as.SingleCellExperiment(so)
+#subset to only a few PCA dimensions
+reducedDim(sce) <- reducedDim(sce)[, 1:10]
+sce <- suppressWarnings(slingshot(
+  sce,
+  reducedDim = 'PCA',
+  clusterLabels = 'seurat_clusters',
+  start.clus = "0"
+))
+
+# extract info about pseudotimes from sce
+slo <- SlingshotDataSet(sce)
+
+plot(reducedDims(sce)$PCA, col = brewer.pal(9,'Set1')[sce$seurat_clusters], pch=16)
+lines(SlingshotDataSet(sce), lwd=2, col='black')
+
+```

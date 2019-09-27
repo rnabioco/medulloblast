@@ -27,9 +27,8 @@ knitr::opts_chunk$set(cache.lazy = FALSE)
 ```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
 source("../R/utils.R")
 library(future)
-message(paste0("using ", params$ncores))
 
-plan("multicore", workers = as.numeric(params$ncores))
+plan("multicore", workers = 7)
 options(future.globals.maxSize = 2 * 1024 ^ 3)
 
 proj_dir <- here()
@@ -138,9 +137,9 @@ The dataset alignment approach seems like a poor option for analyzing these tumo
 
 3) Clustering the aligned results may give us some insights into gene expression patterns, but really all of the tumor cells will be smashed into a single blob making for a very uninformative visualization 
 
-4) the tumor are heterogenous between patients, so merging them together doesn't seem like a useful way to investiage the heterogeneity. 
+4) the tumors are heterogenous between patients, so merging them together doesn't seem like a useful way to investigate the heterogeneity in gene expression profiles per tumor. 
 
-Instead of using alignment the data will be presented unaligned. Unlike studies in development or cell-type identificaiton studies, very few visualizations will require UMAPs. The workflow for analysis will be as follows:
+Instead of using aligning the data will be presented unaligned. Unlike studies in development or cell-type identificaiton studies, very few visualizations will require UMAPs. The workflow for analysis will be as follows:
 
 1) Project data into UMAP and perform coarse clustering to identify malignant, and non-malignant cells types. 
 
@@ -258,7 +257,11 @@ for(i in seq_along(per_sample)){
 
 ## Filter cells and samples.
 
-Suggest removing cells with > 30% mitochondrial UMIs, > 40K UMIs. Also removing WNT sample from dataset as not enough samples/cells for a rigorous analysis. 
+Suggest removing cells with > 30% mitochondrial UMIs, > 40K UMIs. 
+
+Removing WNT sample from dataset as not enough samples/cells for a rigorous analysis. 
+
+Removing sample 1008 as it only has ~45 malignant cells and is dominated by immune cells
 
 ```{r}
 so <- readRDS(file.path("objects", "unfiltered.rds"))
@@ -267,11 +270,11 @@ so <- subset(so, subset = percent.mt < 30)
 so <- subset(so, subset = nCount_RNA < 40000)
 so <- subset(so, subset = nCount_RNA > 500)
 so <- subset(so, subset = subgroup != "WNT")
-
+so <- subset(so, subset = UPN != "1008")
 ```
 
 
-Annotate samples and assign colors to each sample. ALso merge replicates from 966
+Annotate samples and assign colors to each sample. Also merge replicates from 966
 
 
 ```{r}
@@ -348,11 +351,16 @@ Idents(so) <- "coarse_clusters"
 
 ```
 
-
 ```{r}
 
-saveRDS(so, file.path("objects", "so.rds"))
+plot_umap(so, "subgroup", .col = palette_OkabeIto)
+plot_umap(so, "coarse_clusters", label_text = TRUE, label_col = "black")
+plot_umap(so, "UPN", label_text = TRUE, label_col = "black")
+```
 
+
+```{r}
+saveRDS(so, file.path("objects", "so.rds"))
 ```
 
 ## markers 
@@ -408,6 +416,8 @@ cdiv <- so@meta.data %>%
   column_to_rownames("cell")
 
 so <- AddMetaData(so, cdiv)
+
+plot_umap(so, "cdiversity")
 ```
 
 
@@ -418,60 +428,55 @@ new_ids <- c(
  "0" = "malignant",
  "1" = "malignant",
  "2" = "malignant",
- "3" = "macrophage_monocytes",
+ "3" = "macrophage_monocytes", 
  "4" = "malignant",
- "5" = "t-cells",
+ "5" = "malignant",
  "6" = "malignant",
  "7" = "malignant",
  "8" = "malignant",
  "9" = "malignant",
  "10" = "malignant",
- "11" = "malignant",
+ "11" = "lymphocytes", 
  "12" = "malignant",
- "13" = "b-cells",
- "14" = "malignant",
- "15" = "oligodendrocytes_astrocytes",
- "16" = "malignant",
- "17" = "malignant"
+ "13" = "malignant",
+ "14" = "oligodendrocytes_astrocytes_other",
+ "15" = "malignant",
+ "16" = "malignant"
  )
 
 so$coarse_cell_type <- new_ids[as.character(so$coarse_clusters)]
 
-
+plot_umap(so, "coarse_cell_type", .cols = palette_OkabeIto)
 ```
 
 
 
 ```{r}
 
-to_plot <- c("subgroup",
+to_plot <- c(
   "UPN",
   "coarse_clusters",
+  "coarse_cell_type",
+  "subgroup",
   "cdiversity",
-  "csamples",
-  "coarse_cell_type"
+  "csamples"
 ) 
 
+pals <- list(
+  NULL,
+  NULL,
+  palette_OkabeIto,
+  palette_OkabeIto,
+  NULL,
+  NULL
+)
 
-plts <- map(to_plot, 
-    ~plot_umap(so, .x))
+plts <- map2(to_plot, pals,
+    ~plot_umap(so, .x, .cols = .y))
 
 plts
 
 
-pwalk(list(plts,
-           to_plot,
-           c(1.2, 
-             1.5,
-             1.2,
-             1.2,
-             1.2,
-             1.75)), 
-           function(x,y,z) {
-     save_plot(file.path(fig_dir,
-                         paste0("umap_by_", y, ".pdf")),
-                x,
-                base_asp = z)})
 ```
 
 
@@ -485,6 +490,10 @@ outname <- file.path("tables",
                      paste0("metadata_", format(Sys.Date(), "%Y_%m_%d"), ".tsv.gz"))
 write_tsv(mdata_out, outname)
 ```
+
+
+
+
 
 
 

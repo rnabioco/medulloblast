@@ -1,0 +1,168 @@
+---
+title: "Neoplastic cells"
+author: "Kent Riemondy RBI"
+date: "9/27/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
+source("../R/utils.R")
+library(future)
+
+plan("multicore", workers = 7)
+options(future.globals.maxSize = 2 * 1024 ^ 3)
+
+proj_dir <- here()
+data_dir <- file.path(proj_dir, "data", "cellranger", "results")
+doc_dir <- file.path(proj_dir, "docs")
+
+fig_dir <- "figs"
+mkrs_dir <- "markers"
+tbls_dir <- "tables"
+xcel_dir <- file.path(mkrs_dir, "xlsx")
+walk(c(fig_dir, mkrs_dir, tbls_dir, xcel_dir), 
+     dir.create, 
+     showWarnings = F)
+```
+
+
+
+```{r}
+so <- readRDS(file.path("objects", "so.rds"))
+```
+
+
+```{r}
+malignant_cells <- colnames(so)[so$coarse_cell_type == "malignant"]
+
+so <- so[, malignant_cells]
+
+
+so <- FindVariableFeatures(
+  so,
+  selection.method = "vst",
+  nfeatures = 3000,
+  verbose = FALSE
+)
+
+so <- ScaleData(so, features = VariableFeatures(so), 
+                  vars.to.regress = c("percent.mt", "nCount_RNA"), 
+                  verbose = TRUE)
+
+so <- RunPCA(so, 
+             features = VariableFeatures(so),
+             npcs = 100, 
+             verbose = FALSE)
+
+ElbowPlot(so, ndims = 100)
+
+# make graphs and use graphs for UMAP
+so <- FindNeighbors(so, 
+                      reduction = "pca", 
+                      dims = 1:50, 
+                      k.param = 50L)
+
+
+so <- RunUMAP(so, 
+              graph = "RNA_snn", 
+              min.dist = 0.4)
+
+so <- FindClusters(so, 
+                   resolution = c(0.1, 0.3, 0.5))
+
+so$coarse_clusters_malignant <- so$RNA_snn_res.0.1
+
+Idents(so) <- "coarse_clusters_malignant"
+
+
+plot_umap(so, "coarse_clusters_malignant")
+
+plot_umap(so, "subgroup")
+```
+
+## Compare to Cavatelli subgroups
+
+```{r, fig.width = 18, fig.height = 8}
+array_mdata <- read.table(file.path(doc_dir,
+                                    "microarray_data",
+                                    "2019_09_04_tidy_CEL_annotation_file_for_Cavalli_2012.txt"),
+                          stringsAsFactors = FALSE) %>% 
+  as_tibble() %>% 
+  mutate(Subtype = str_trim(Subtype))
+
+array_mat <- read.table(file.path(doc_dir,
+                                    "microarray_data",
+                                "2019_09_04_expression_data_all_medullo_Cavalli_GEO_numbers.txt"),
+                        stringsAsFactors = FALSE) %>% 
+  as_tibble()
+
+# average probesets
+expr_mat <- array_mat %>% 
+  gather("key", "value", -sym) %>% 
+  group_by(sym, key) %>% 
+  summarize(value = mean(value)) %>%
+  spread(key, value) %>%
+  as.data.frame() %>% 
+  column_to_rownames("sym") %>% 
+  as.matrix()
+
+# average probesets across subtypes
+avg_mat <- unique(array_mdata$Subtype) %>% 
+  map(function(x){
+    cols <- array_mdata[which(array_mdata$Subtype == x), 
+                   "GEO_number", 
+                   drop = TRUE]
+    
+    vals <- rowMeans(expr_mat[, cols])
+    res <- tibble(sym = names(vals))
+    res[[x]] <- vals
+    res
+    }) %>% 
+  Reduce(function(x, y) {left_join(x, y, by = "sym")}, .) %>% 
+  as.data.frame() %>% 
+  column_to_rownames("sym") %>% 
+  as.matrix()
+
+library(clustifyr)
+
+res <- clustify(so, ref_mat = avg_mat, cluster_col = "coarse_clusters", seurat_out = FALSE) %>% 
+  cor_to_call(.) %>% 
+  left_join(rownames_to_column(so@meta.data, "cell"), .,
+            by = c("coarse_clusters" = "cluster")) %>% 
+  dplyr::select(cell, 
+                subtype = type, 
+                subtype_cor = r) %>% 
+  as.data.frame() %>% 
+  column_to_rownames("cell")
+
+so <- AddMetaData(so, res)
+a <- plot_umap(so, "subtype")
+b <- plot_umap(so, "subgroup")
+d <- plot_umap(so, "UPN")
+plot_grid(a, b, d, nrow = 1)
+```
+
+
+```{r}
+
+saveRDS(so, "objects/all_neoplastic.rds")
+```
+
+
+```{r markers of each subgroup}
+so <- readRDS("objects/all_neoplastic.rds")
+
+Idents(so) <- "subgroup"
+
+mkrs <- FindAllMarkers(so, only_pos = TRUE)
+
+write_tsv(mkrs, 
+          file.path(mkrs_dir, "subgroup_markers_neoplastic.tsv"))
+
+write_markers_xlsx(split(mkrs, mkrs$cluster),
+                   file.path(xcel_dir, "subgroup_markers_neoplastic.xlsx"))
+```

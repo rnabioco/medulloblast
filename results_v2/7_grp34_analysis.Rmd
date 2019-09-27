@@ -1,0 +1,185 @@
+---
+title: "Group 3 and 4 analysis"
+author: "Kent Riemondy RBI"
+date: "9/26/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
+source("../R/utils.R")
+library(future)
+
+plan("multicore", workers = 7)
+options(future.globals.maxSize = 2 * 1024 ^ 3)
+
+proj_dir <- here()
+data_dir <- file.path(proj_dir, "data", "cellranger", "results")
+doc_dir <- file.path(proj_dir, "docs")
+
+fig_dir <- "figs"
+mkrs_dir <- "markers"
+tbls_dir <- "tables"
+xcel_dir <- file.path(mkrs_dir, "xlsx")
+walk(c(fig_dir, mkrs_dir, tbls_dir, xcel_dir), 
+     dir.create, 
+     showWarnings = F)
+```
+
+
+
+```{r}
+so <- readRDS(file.path("objects", "all_neoplastic.rds"))
+```
+
+
+```{r}
+gp_cells <- colnames(so)[so$subgroup != "SHH"]
+
+so <- so[, gp_cells]
+
+so <- FindVariableFeatures(
+  so,
+  selection.method = "vst",
+  nfeatures = 3000,
+  verbose = FALSE
+)
+
+so <- ScaleData(so, features = VariableFeatures(so), 
+                  vars.to.regress = c("percent.mt", "nCount_RNA"), 
+                  verbose = TRUE)
+
+so <- RunPCA(so, 
+             features = VariableFeatures(so),
+             npcs = 100, 
+             verbose = FALSE)
+
+ElbowPlot(so, ndims = 100)
+
+# make graphs and use graphs for UMAP
+so <- FindNeighbors(so, 
+                      reduction = "pca", 
+                      dims = 1:50, 
+                      k.param = 50L)
+
+
+so <- RunUMAP(so, 
+              dims = 1:50, 
+              n.neighbors = 30L,
+              min.dist = 0.4)
+
+so <- FindClusters(so, 
+                   resolution = c(0.1, 0.3, 0.5))
+
+so$coarse_clusters_shh <- so$RNA_snn_res.0.1
+
+Idents(so) <- "coarse_clusters_gp34"
+
+plot_umap(so, "coarse_clusters_gp34")
+plot_umap(so, "UPN")
+plot_umap(so, "subtype")
+```
+
+## Harmonize
+
+```{r}
+library(harmony)
+so <- RunHarmony(so,
+                 "UPN", 
+                 theta = 1.5,
+                 plot_convergence = TRUE)
+
+so <- RunUMAP(so, 
+              reduction = "harmony", 
+              dims = 1:40, 
+              min.dist = 0.2,
+              n.neighbors = 30L,
+              reduction.name = "umap_harmony",
+              reduction.key = "UMAP_Harmony_")
+
+plot_feature(so, "UPN", embedding = "umap_harmony")
+plot_umap(so, "UPN")
+plot_umap(so, "subtype")
+
+so <- FindNeighbors(so, reduction = "harmony", dims = 1:40)
+so <- FindClusters(so, resolution = 0.2)
+
+
+
+
+so$coarse_clusters_gp34_harmony <- so$seurat_clusters
+Idents(so) <- "coarse_clusters_gp34_harmony"
+plot_feature(so, "coarse_clusters_gp34_harmony", embedding = "umap_harmony")
+```
+
+```{r}
+saveRDS(so, "objects/gp34.rds")
+```
+
+
+```{r markers of each subgroup}
+so <- readRDS("objects/gp34.rds")
+
+Idents(so) <- "coarse_clusters_gp34_harmony"
+
+mkrs <- FindAllMarkers(so, only.pos = TRUE)
+
+write_tsv(mkrs, 
+          file.path(mkrs_dir, "harmony_markers_gp34.tsv"))
+
+write_markers_xlsx(split(mkrs, mkrs$cluster),
+                   file.path(xcel_dir, "harmony_markers_gp34.xlsx"))
+```
+
+
+## Add in Northcutt paper metamodule scores
+
+```{r}
+supp_tbl_2 <- "https://static-content.springer.com/esm/art%3A10.1038%2Fs41586-019-1434-6/MediaObjects/41586_2019_1434_MOESM3_ESM.xlsx"
+
+
+download.file(supp_tbl_2, "../docs/northcutt_sup_tbl_2.xlsx")
+sup_tbl <- read_excel("../docs/northcutt_sup_tbl_2.xlsx", 
+           sheet = 2,
+           skip = 3) 
+
+sup_tbl[, 1] <- NULL
+
+# extract out each metaprogram following their approach of excluding ribosomal
+# and protein genes and non-coding RNAs
+
+mps <- map(seq(1, ncol(sup_tbl), 2), 
+    ~c(.x, .x + 1)) %>% 
+  map(., ~sup_tbl[, .x] 
+      %>% na.omit()) 
+
+mp_names <- map_chr(mps, ~colnames(.x)[2])
+mps <- map(mps, ~.x[, 2, drop = TRUE]) 
+names(mps) <- mp_names
+
+gp34_mps <- mps[str_subset(names(mps), "Group")]
+for (i in seq_along(gp34_mps)){
+  so <- AddModuleScore(so, 
+                       features = list(c(gp34_mps[[i]])),
+                       ctrl = 50,
+                       name = str_c( names(gp34_mps)[i], "_metafactor"),
+                       seed = 42)
+}
+
+```
+
+
+```{r}
+
+so <- CellCycleScoring(so,
+                       g2m.features = cc.genes$g2m.genes,
+                       s.features = cc.genes$s.genes)
+```
+
+
+```{r}
+saveRDS(so, "objects/gp34.rds")
+```
