@@ -89,10 +89,7 @@ save_plot(file.path(fig_dir, "umap_by_coarse_cell_type.pdf"),
 
 ## Plot cell distibutions per subgroup and tumor
 
-
-
 ```{r}
-subgroup_pretty_id <- factor(c())
 sc_mdata <- so@meta.data %>% 
   rownames_to_column("cell")
 

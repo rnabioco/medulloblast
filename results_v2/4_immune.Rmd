@@ -8,147 +8,226 @@ output: html_document
 
 ## Subset immune populations
 
+```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
+source("../R/utils.R")
+fig_dir <- file.path(fig_dir, "immune")
+dir.create(fig_dir)
+```
 
 ```{r}
 so <- readRDS(file.path("objects", "so.rds"))
 ```
 
 ```{r}
-immune_cells <- colnames(so)[so$coarse_cell_type %in% c("t-cells",
-                                                        "b-cells", 
-                                                        "macrophage_monocytes")]
+immune_cells <- colnames(so)[so$coarse_cell_type %in% c(
+                               "lymphocytes",
+                               "macrophage_monocytes")]
 
 so <- so[, immune_cells]
 so <- FindVariableFeatures(so, 
-                             selection.method = "vst", 
-                             nfeatures = 3000, 
-                             verbose = FALSE)
+                           selection.method = "vst", 
+                           nfeatures = 2000, 
+                           verbose = FALSE)
 
 so <- ScaleData(so, 
-                  vars.to.regress = c("percent.mt", "nCount_RNA"), 
-                  verbose = TRUE)
+                vars.to.regress = c("percent.mt", "nCount_RNA"), 
+                verbose = TRUE)
 
 so <- RunPCA(so, npcs = 40, verbose = FALSE)
 
 so <- FindNeighbors(so,
-                      reduction = "pca",
-                      dims = 1:20,
-                      k.param = 20)
+                    reduction = "pca",
+                    dims = 1:20,
+                    k.param = 20)
 
 so <- RunUMAP(so, graph = "RNA_snn")
 
 
-so <- FindClusters(so, resolution = c(0.3, 0.1, 0.05, 0.02, .01))
+so <- FindClusters(so, resolution = c(0.4, 0.3, 0.25, 0.2, 0.1, 0.05))
 
 
-so$fine_immune_clusters <- so$RNA_snn_res.0.3
-
+so$fine_immune_clusters <- so$RNA_snn_res.0.4
 
 clusters <- so$fine_immune_clusters
 
-so$refined_immune_clusters <- ifelse(clusters %in% c("2", "3", "5", "6",
-                                                     "7", "9"),
-                                     "macrophage_monocytes",
-                                     ifelse(clusters %in% c("4"),
-                                            "b-cells",
-                                            ifelse(clusters %in% c("0",
-                                                                   "1",
-                                                                   "11","10"),
-                                                   "t-cells",
-                                                   ifelse(clusters == "8",
-                                                          "macrophage_monocytes_minor",
-                                                          "unknown"))))
+p <- plot_umap(so, "fine_immune_clusters")
+p
+save_plot(file.path(fig_dir, "umap_by_clusters.pdf"), p, base_asp = 1.2)
 
+p <- plot_umap(so, "subgroup")
+p
+save_plot(file.path(fig_dir, "umap_by_subgroup.pdf"), p, base_asp = 1.2)
+
+p <- plot_umap(so, "UPN")
+p
+save_plot(file.path(fig_dir, "umap_by_upn.pdf"), p, base_asp = 1.2)
 ```
+
+
+## Annotate cell types
+
+Using Human primary cell atlas https://www.ncbi.nlm.nih.gov/pubmed/24053356
+
+
+```{r, fig.height=20, fig.width=8}
+library(clustifyr)
+hpca_ref <- readRDS("../dbases/human_primary_cell_atlas.rds")
+
+res <- clustify(
+  so,
+  hpca_ref, 
+  cluster_col = "fine_immune_clusters",
+  query_genes = so@assays$RNA@var.features,
+  seurat_out = FALSE
+)
+
+library(ComplexHeatmap)
+
+hmap <- Heatmap(t(res), 
+                viridis::viridis(256), 
+                "Spearman\ncorrelation",
+                row_title = "Cell types from HCPA",
+                column_title = "Clusters")
+hmap
+
+pdf(file.path(fig_dir, "hmap_hpca.pdf"),
+    width = 8, height = 22)
+  print(hmap)
+dev.off()
+```
+## add in cluster diversity
 
 
 ```{r}
-outdir <- "figs/immune_subset/"
-dir.create(outdir, showWarnings = FALSE)
+cdiv <- so@meta.data %>% 
+  rownames_to_column("cell") %>% 
+  mutate(n_samples = length(unique(UPN))) %>% 
+  group_by(fine_immune_clusters) %>% 
+  mutate(cdiversity = length(unique(UPN)) / n_samples,
+         samples_per_cluster = length(unique(UPN))) %>% 
+  ungroup() %>% 
+  select(cell, samples_per_cluster) %>% 
+  as.data.frame(.) %>% 
+  column_to_rownames("cell")
 
-plts <- map(str_subset(colnames(so@meta.data), "RNA_snn"), 
-            ~plot_umap(so, .x) + 
-              labs(title = .x))
+so <- AddMetaData(so, cdiv)
 
-p_1 <- plot_umap(so, "subgroup") + labs(title = "Subgroup")
-p_2 <- plot_umap(so, "refined_immune_clusters") + labs(title = "Cell Type")
-plts <- c(plts, list(p_1), list(p_2))
-
-plt <- plot_grid(plotlist = plts, nrow = 3, ncol = 3)
-save_plot(file.path(outdir, "umaps_by_resolution.pdf"), 
-          plt, 
-          nrow = 3, ncol = 3)
-
-
-plts <- map(c("refined_immune_clusters", "subgroup", "UPN"),
-    ~plot_umap(so, .x))
-
-plt <- plot_grid(plotlist = plts, nrow = 1, ncol = 3)
-save_plot(file.path(outdir, "umaps_by_class.pdf"), 
-          plt, 
-          nrow = 1, ncol = 3)
+p <- plot_umap(so, "samples_per_cluster")
+p
+save_plot(file.path(fig_dir, "umap_by_sample_number.pdf"), p, base_asp = 1.2)
 ```
+
+Cluster 
+```{r}
+mdata <- so@meta.data %>% 
+  rownames_to_column("cell")
+ctypes  <- call_to_metadata(cor_to_call(res, 
+                             metadata = mdata, 
+                             cluster_col = "fine_immune_clusters", threshold = 0.5),
+                 metadata = mdata,
+                 cluster_col = "fine_immune_clusters") %>% 
+  mutate(type = ifelse(type == "r<0.5, unassigned",
+                       "unknown",
+                       type)) %>% 
+  pull(type)
+
+# keep broad cell type definition
+so$hpca_cell_types <- ctypes %>% 
+  str_split(., ":") %>% 
+  map_chr(~str_c(.x[1:(length(.x) - 1)], collapse = ":"))
+
+so$hpca_fine_cell_types <- ctypes 
+
+p <- plot_umap(so, "hpca_fine_cell_types")
+p
+save_plot(file.path(fig_dir, "umap_by_coarse_cell_type.pdf"), p, base_asp = 1.2)
+
+p <- plot_umap(so, "hpca_cell_types")
+p
+save_plot(file.path(fig_dir, "umap_by_fine_cell_type.pdf"), p, base_asp = 1.2)
+```
+
 
 ## save object
 
 ```{r }
-saveRDS(so, file.path("objects", "immune_sobj.rds"))
+saveRDS(so, file.path("objects", "immune_so.rds"))
 ```
 
+
+## Immune cluster markers
+
+```{r, eval = F}
+so <- readRDS(file.path("objects", "immune_so.rds"))
+
+Idents(so) <- "fine_immune_clusters"
+
+mkrs <- FindAllMarkers(so,
+                       only.pos = TRUE) %>% 
+         filter(p_val_adj < 0.05)
+      
+write_tsv(mkrs, 
+          file.path(mkrs_dir, "immune_subset_cluster_markers.tsv"))
+
+write_markers_xlsx(split(mkrs, mkrs$cluster), 
+                   file.path(xcel_dir, "immune_subset_cluster_markers.xlsx"))
+
+Idents(so) <- "hpca_cell_types"
+
+mkrs <- FindAllMarkers(so,
+                       only.pos = TRUE) %>% 
+         filter(p_val_adj < 0.05)
+      
+write_tsv(mkrs, 
+          file.path(mkrs_dir, "immune_subset_cell_type_markers.tsv"))
+
+write_markers_xlsx((split(mkrs, mkrs$cluster), 
+                   file.path(xcel_dir, "immune_subset_cell_type_markers.xlsx"))
+```
+
+## Cell type composition by subgroup
+
+
+```{r}
+p <- plot_features_split(so, "hpca_cell_types", "subgroup")
+
+p
+save_plot(file.path(fig_dir, "umap_by_fine_cell_types_split_by_subgroup.pdf"), p, base_asp = 1.2)
+```
 
 ## Markers within cluster
 
 ```{r, eval = F}
-Idents(so) <- "refined_immune_clusters"
+so <- readRDS(file.path("objects", "immune_so.rds"))
 
-mkrs_between_samples <- map(unique(sort(so$refined_immune_clusters)), 
-    function(x) {
-      
-      tmp_obj <- subset(so, idents = x)
-      Idents(tmp_obj) <- "subgroup"
-      mkrs <- FindAllMarkers(tmp_obj,
-                          only.pos = TRUE) %>% 
-         filter(p_val_adj < 0.01)
-      mkrs
-    })
-
-names(mkrs_between_samples) <- unique(sort(so$refined_immune_clusters))
-
-mkrs_between_samples_df <- bind_rows(mkrs_between_samples, 
-                                  .id = "cluster")
-write_tsv(mkrs_between_samples_df, 
-          file.path(mkrs_dir, "immune_subset_cluster_markers_between_subgroups.tsv"))
-
-openxlsx::write.xlsx(mkrs_between_samples, 
-                      file.path(mkrs_dir, "immune_subset_cluster_markers_between_subgroups.xlsx"))
-```
-
-```{r}
-## reload object
-
-so <- readRDS(file.path("objects", "immune_sobj.rds"))
+Idents(so) <- "hpca_cell_types"
 
 so_sub <- subset(so, 
-                 subset = refined_immune_clusters == "macrophage_monocytes")
+                 subset = hpca_cell_types == "Macrophage:monocyte-derived")
 
 mkrs <- FindMarkers(so_sub, 
-                    ident.1 = "GP4", 
-                    ident.2 = "SHH", 
+                    ident.1 = "SHH", 
                     group.by = "subgroup")
 
 mkrs <- tibble::rownames_to_column(mkrs, "gene")
 
 write_tsv(mkrs, 
           file.path(mkrs_dir, 
-                    "macrophage_markers_between_gp4_shh.tsv"))
+                    "macrophage_markers_shh_to_others.tsv"))
+
+mkrs <- set_xlsx_class(mkrs, "gene", "Text")
+openxlsx::write.xlsx(mkrs, 
+          file.path(xcel_dir, 
+                    "macrophage_markers_shh_to_others.xlsx"))
+
 ```
 
 ```{r}
 
 mkrs <- arrange(mkrs, 
                 p_val_adj)
-up_mkrs <- filter(mkrs, avg_logFC > 0) %>% slice(1:50)
-down_mkrs <- filter(mkrs, avg_logFC < 0) %>% slice(1:50)
+up_mkrs <- filter(mkrs, avg_logFC > 0) %>% slice(1:30)
+down_mkrs <- filter(mkrs, avg_logFC < 0) %>% slice(1:30)
 
 top_mkrs <- bind_rows(up_mkrs, down_mkrs)
 
@@ -164,17 +243,15 @@ to_plot <- t(scale(t(as.matrix(to_plot))))
 hm <- Heatmap(to_plot, col = viridis::viridis(256),
         name = "Z-score")
 
-pdf("macrophages_differences_between_subgroups.pdf", height = 16)
+pdf(file.path(fig_dir, "hmap_macrophages_differences_between_subgroups.pdf"), height = 12)
 print(hm)
 dev.off()
 
 
-xcel_out <- list()
-xcel_out$macrophages <- mkrs
 ```
 
 
-```{r}
+```{r, eval = FALSE}
 so_sub <- subset(so, 
                  subset = refined_immune_clusters == "t-cells")
 
@@ -191,7 +268,7 @@ write_tsv(mkrs,
 
 ```
 
-```{r}
+```{r, eval = FALSE}
 
 mkrs <- arrange(mkrs, 
                 p_val_adj)
@@ -251,3 +328,89 @@ save_plot("immune_population_umaps_expr.pdf", plt,
 
 ```
 
+```{r}
+sc_mdata <- so@meta.data %>% 
+  rownames_to_column("cell")
+
+new_annotation <- so@meta.data %>% 
+    rownames_to_column("cell") %>% 
+    group_by(hpca_cell_types, fine_immune_clusters) %>%
+    summarize() %>%
+    mutate(fine_cell_type_ids = paste0(hpca_cell_types, "_", "#", row_number())) %>% 
+    ungroup() %>% 
+  select(fine_immune_clusters, fine_cell_type_ids)
+
+so$fine_cell_type_ids <- left_join(sc_mdata, new_annotation, by = c("fine_immune_clusters")) %>% 
+  pull(fine_cell_type_ids)  
+
+sc_mdata <- so@meta.data %>% 
+  rownames_to_column("cell")
+
+per_patient <- sc_mdata %>% 
+  filter(hpca_cell_types == "Macrophage:monocyte-derived") %>% 
+  group_by(UPN) %>%
+  mutate(n_cells = n()) %>% 
+  group_by(UPN, fine_cell_type_ids) %>% 
+  summarize(n = n(),
+            prop_cell_type = n / unique(n_cells),
+            subgroup = unique(subgroup))
+
+p <- ggplot(per_patient, 
+       aes(UPN, prop_cell_type)) +
+  geom_col(aes(fill = fine_cell_type_ids)) +
+  labs(x = "Tumor ID",
+       y = "Proportion of each cell type") +
+  scale_fill_manual(values = discrete_palette_default, 
+                    name = "") + 
+  facet_grid(~subgroup, scales = "free_x", space = "free_x") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        legend.position = "top",
+        strip.background = element_rect(fill = "white"))
+p
+```
+## Gene set enrichment
+
+### Macrophages
+```{r}
+library(gprofiler2)
+library(ggrepel)
+mkrs <- read_tsv(file.path(mkrs_dir, 
+                    "macrophage_markers_shh_to_others.tsv")) %>% 
+  filter( p_val_adj < 0.05)
+
+go_res <- gost(mkrs$gene, 
+               ordered_query = TRUE,
+               sources = c("GO", 
+                          "KEGG", 
+                          "REAC", 
+                          "TF"))
+p <- gostplot(go_res, 
+              interactive = FALSE)
+              
+
+text_data <- group_by(p$data, 
+                      source) %>% 
+  slice(1:2)
+
+p + 
+  geom_text_repel(data = text_data, aes(label = term_name))
+
+go_res[["result"]] %>% 
+  mutate(parents = unlist(map(parents, ~str_c(.x, collapse = ",")))) %>% 
+  write_tsv(., file.path(tbls_dir, "monocyte_shh_gp4_goterms.tsv"))
+
+go_res[["result"]] %>% 
+  mutate(parents = unlist(map(parents, ~str_c(.x, collapse = ","))),
+         source = str_replace_all(source, "[[:punct:]]", " ")) %>% 
+  select(-significant, -query) %>% 
+  split(., .$source) %>% 
+  openxlsx::write.xlsx(., file.path(tbls_dir, "monocyte_shh_gp4_goterms.xlsx"))
+```
+
+
+
+## save object
+
+```{r }
+saveRDS(so, file.path("objects", "immune_so.rds"))
+```

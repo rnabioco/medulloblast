@@ -35,6 +35,26 @@ discrete_palette_default <- c(tableu_classic_palatte,
                              brewer.pal(8, "Dark2"),
                              palette_OkabeIto)
 
+
+# ----------------------------------------------------
+library(future)
+
+plan("multicore", workers = 7)
+options(future.globals.maxSize = 2 * 1024 ^ 3)
+
+proj_dir <- here()
+data_dir <- file.path(proj_dir, "data", "cellranger", "results")
+doc_dir <- file.path(proj_dir, "docs")
+
+fig_dir <- "figs"
+mkrs_dir <- "markers"
+tbls_dir <- "tables"
+xcel_dir <- file.path(mkrs_dir, "xlsx")
+walk(c(fig_dir, mkrs_dir, tbls_dir, xcel_dir),
+     dir.create,
+     showWarnings = F)
+
+
 #' Plot cells in reduced dimensionality 2D space
 #'
 #' @description Cells can be colored by gene or feature in meta.data dataframe
@@ -408,6 +428,7 @@ write_markers_xlsx <- function(mrkr_list,
 
 }
 
+
 #' Extract out reduced dimensions and cell metadata to tibble
 #'
 #' @param obj Seurat Object
@@ -448,40 +469,48 @@ plot_features_split <- function(sobj, feature, group = "orig.ident",
                                 ...) {
 
   # get max coordinates
-  dim_reduc <- sobj@reductions[[embedding]]@cell.embeddings[, 1:2]
-  x_lims <- c(min(dim_reduc[, 1]), max(dim_reduc[, 1]))
-  y_lims <- c(min(dim_reduc[, 2]), max(dim_reduc[, 2]))
+  # dim_reduc <- sobj@reductions[[embedding]]@cell.embeddings[, 1:2]
+  # x_lims <- c(min(dim_reduc[, 1]), max(dim_reduc[, 1]))
+  # y_lims <- c(min(dim_reduc[, 2]), max(dim_reduc[, 2]))
+  #
+  # groups <- sort(unique(sobj@meta.data[[group]]))
+  #
+  # if(!is.null(cols)) {
+  #    cols <- cols[1:length(groups)]
+  #    plts <- map2(groups, cols, function(x, y) {
+  #               cells <- rownames(sobj@meta.data)[sobj@meta.data[[group]] == x]
+  #               plot_feature(sobj,
+  #                            feature = feature,
+  #                            embedding = embedding,
+  #                            cell_filter = cells,
+  #                            .cols = y,
+  #                            ...) +
+  #                 coord_cartesian(xlim = x_lims, y = y_lims)
+  #             })
+  # } else {
+  #   plts <- map(groups, function(x) {
+  #     cells <- rownames(sobj@meta.data)[sobj@meta.data[[group]] == x]
+  #     plot_feature(sobj,
+  #                  feature = feature,
+  #                  embedding = embedding,
+  #                  cell_filter = cells,
+  #                  ...) +
+  #       coord_cartesian(xlim = x_lims, y = y_lims)
+  #   })
+  # }
+  #
+  # if(add_title){
+  #   plts <- map2(plts, groups, ~.x + labs(title = .y))
+  # }
+  # plts
+  plot_feature(sobj,
+               feature = feature,
+               .cols = cols,
+               embedding = embedding,
+               ...) +
+    facet_wrap(as.formula(paste0("~", group))) +
+    theme(strip.background = element_rect(fill = "white"))
 
-  groups <- sort(unique(sobj@meta.data[[group]]))
-
-  if(!is.null(cols)) {
-     cols <- cols[1:length(groups)]
-     plts <- map2(groups, cols, function(x, y) {
-                cells <- rownames(sobj@meta.data)[sobj@meta.data[[group]] == x]
-                plot_feature(sobj,
-                             feature = feature,
-                             embedding = embedding,
-                             cell_filter = cells,
-                             .cols = y,
-                             ...) +
-                  coord_cartesian(xlim = x_lims, y = y_lims)
-              })
-  } else {
-    plts <- map(groups, function(x) {
-      cells <- rownames(sobj@meta.data)[sobj@meta.data[[group]] == x]
-      plot_feature(sobj,
-                   feature = feature,
-                   embedding = embedding,
-                   cell_filter = cells,
-                   ...) +
-        coord_cartesian(xlim = x_lims, y = y_lims)
-    })
-  }
-
-  if(add_title){
-    plts <- map2(plts, groups, ~.x + labs(title = .y))
-  }
-  plts
 }
 
 
