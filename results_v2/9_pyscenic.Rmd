@@ -1,0 +1,139 @@
+---
+title: "PyScenic"
+author: "Kent Riemondy RBI"
+date: "10/3/2019"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
+source("../R/utils.R")
+```
+
+Ran on bodhi (see [python script](../data/pyscenic/pyscenic_analysis.py))
+
+```{r}
+data_dir <- "../data/pyscenic/"
+grp34_data <- read_csv(file.path(data_dir, 
+                                 "output_grp34/auc_res.csv"))
+
+shh_data <- read_csv(file.path(data_dir, 
+                               "output_shh2/auc_res.csv"))
+```
+
+## SHH dataset
+
+```{r}
+so <- readRDS("objects/shh.rds")
+
+shh_data <- shh_data %>%
+  as.data.frame() %>%
+  column_to_rownames("Cell") %>%
+  as.matrix() %>% 
+  t()
+
+shh_data <- shh_data[, Cells(so)]
+so[["TF"]] <- CreateAssayObject(data = shh_data)
+
+Idents(so) <- "coarse_clusters_shh_harmony"
+DefaultAssay(so) <- "TF"
+
+so_tf_markers <- FindAllMarkers(so, 
+                                assay = "TF", 
+                                logfc.threshold = 0, 
+                                only.pos = TRUE)
+
+write_tsv(so_tf_markers, "tables/shh_tf_activities.tsv")
+write_markers_xlsx(split(so_tf_markers, so_tf_markers$cluster),
+                   path ="tables/shh_tf_activities.xlsx",
+                   description_string = "Transcription factor regulons derived from PyScenic that are significantly enriched in each cluster")
+
+topx <- so_tf_markers %>% 
+  group_by(cluster) %>% 
+  arrange(p_val_adj, .by_group = TRUE) %>% 
+  slice(1:5)
+
+so <- ScaleData(so)
+
+p <- DoHeatmap(so, 
+               group.colors = discrete_palette_default,
+        features = unique(topx$gene),
+        group.by = "coarse_clusters_shh_harmony",
+        angle = 0, 
+        raster = FALSE, 
+        draw.lines = TRUE)
+
+p <- p +
+  scale_fill_gradientn(colours = viridis::viridis(256),
+                       name = "Regulon AUC\nZ-scores")
+
+save_plot(file.path(fig_dir, "heatmap_tfs_shh.pdf"), 
+          p,
+          base_asp = 2,
+          base_height = 8)
+
+#DefaultAssay(so) <- "RNA"
+#saveRDS(so, "objects/shh.rds")
+```
+
+
+## Group 3 and Group 4 dataset
+
+```{r}
+so <- readRDS("objects/gp34.rds")
+
+grp34_data <- grp34_data %>%
+  as.data.frame() %>%
+  column_to_rownames("Cell") %>%
+  as.matrix() %>% 
+  t()
+
+grp34_data <- grp34_data[, Cells(so)]
+so[["TF"]] <- CreateAssayObject(data = grp34_data)
+
+Idents(so) <- "coarse_clusters_gp34_harmony"
+DefaultAssay(so) <- "TF"
+so_tf_markers <- FindAllMarkers(so, 
+               assay = "TF", 
+               logfc.threshold = 0, 
+               only.pos = TRUE)
+
+write_tsv(so_tf_markers, "tables/gp34_tf_activities.tsv")
+write_markers_xlsx(split(so_tf_markers, so_tf_markers$cluster),
+                   path ="tables/gp34_tf_activities.xlsx",
+                   description_string = "Transcription factor regulons derived from PyScenic that are significantly enriched in each cluster")
+
+topx <- so_tf_markers %>% 
+  group_by(cluster) %>% 
+  arrange(p_val_adj, .by_group = TRUE) %>% 
+  slice(1:5)
+
+so <- ScaleData(so)
+
+p <- DoHeatmap(so, 
+               group.colors = discrete_palette_default,
+        features = unique(topx$gene),
+        group.by = "coarse_clusters_gp34_harmony",
+        angle = 0,
+        raster = FALSE, 
+        draw.lines = TRUE)
+
+p <- p +
+  scale_fill_gradientn(colours = viridis::viridis(256),
+                       name = "Regulon AUC\nZ-scores")
+
+save_plot(file.path(fig_dir, "heatmap_tfs_gp34.pdf"), 
+          p,
+          base_asp = 2,
+          base_height = 8)
+
+
+#DefaultAssay(so) <- "RNA"
+
+#saveRDS(so, "objects/gp34.rds")
+```
+

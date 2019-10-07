@@ -124,6 +124,14 @@ plot_feature <- function(seurat_obj,
     feature_dat <- FetchData(seurat_obj, feature) %>%
       as.data.frame() %>%
       tibble::rownames_to_column("cell")
+
+    # if data is pulled from another assay seurat prefixes the assay name
+    # therefore fix column name
+    if(colnames(feature_dat)[2] != feature){
+      warning("renaming ", colnames(feature_dat)[2], " to ", feature, call. = FALSE)
+      colnames(feature_dat)[2] <- feature
+    }
+
     embed_dat <- left_join(embed_dat, feature_dat, by = "cell")
   }
 
