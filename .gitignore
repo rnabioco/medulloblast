@@ -22,3 +22,5 @@
 *.js
 *.npz
 *.joblib
+*.ipynb_checkpoints
+*.h5ad

@@ -9,16 +9,16 @@ output: html_document
 source("../R/utils.R")
 library(openxlsx)
 library(future)
-plan(strategy = "multicore", workers = 6)
-options(future.globals.maxSize =4 * 1024 ^ 3)
+plan(strategy = "multicore", workers = 7)
+options(future.globals.maxSize = 4 * 1024 ^ 3)
 
 proj_dir <- here()
 data_dir <- file.path(proj_dir, "data", "cellranger", "results")
 doc_dir <- file.path(proj_dir, "docs")
 
-fig_dir <- "figs"
-mkrs_dir <- "markers"
-tbls_dir <- "tables"
+fig_dir <- file.path("figs", "mouse_models")
+mkrs_dir <- file.path("markers", "mouse_models")
+tbls_dir <- file.path("tables", "mouse_models")
 mkrs_tsv_dir <- file.path(mkrs_dir, "tsv")
 mkrs_xlsx_dr <- file.path(mkrs_dir, "xlsx")
 
@@ -234,7 +234,6 @@ so <- FindVariableFeatures(so,
                            verbose = FALSE)
 
 so <- ScaleData(so, 
-                #vars.to.regress = c("percent.mt", "nCount_RNA"), 
                 verbose = TRUE)
 
 so <- RunPCA(so, npcs = 40, verbose = FALSE)
@@ -252,13 +251,14 @@ so <- RunUMAP(so,
 
 plts <- list()
 plts[[1]] <- plot_feature(so, "orig.ident", embedding = "umap") 
-plts[2:4] <- plot_features_split(so, 
+plts[[2]] <- plot_features_split(so, 
                                  "orig.ident", "orig.ident", 
                                  embedding = "umap",
                                  cols = discrete_palette_default)
 
-p <- plot_grid(plotlist = plts, nrow = 2, ncol = 2)
-p
+plts[[1]]
+
+plts[[2]]
 ```
 
 ```{r}
@@ -269,20 +269,35 @@ so$seurat_clusters <- NULL
 so$RNA_snn_res.0.32 <- NULL
 
 plts <- list()
-plts[[1]] <- plot_feature(so, "clusters", embedding = "umap") + labs(title = "All samples")
-plts[2:4] <- plot_features_split(so, "clusters", "orig.ident", embedding = "umap", add_title = TRUE)
+plts[[1]] <- plot_feature(so, "clusters", embedding = "umap") + 
+  guides(color = guide_legend(ncol = 2,
+                              override.aes = list(size = 4))) + 
+  labs(title = "All samples")
+plts[[2]] <- plot_features_split(so, 
+                                 "clusters", 
+                                 "orig.ident",
+                                 embedding = "umap", add_title = TRUE)
 
-p <- plot_grid(plotlist = plts, nrow = 2, ncol = 2)
-p
+plts
+
 
 ```
 
 Add cell cycle stage
 
 ```{r, fig.width = 12}
+
+s_genes_mouse <- inner_join(tibble(gene = cc.genes$s.genes),
+                            orthologs, 
+                            by = c("gene" = "external_gene_name")) %>% pull(mmusculus_homolog_associated_gene_name)
+
+g2m_genes_mouse <- inner_join(tibble(gene = cc.genes$s.genes),
+                            orthologs, 
+                            by = c("gene" = "external_gene_name")) %>% pull(mmusculus_homolog_associated_gene_name)
+
 so <- CellCycleScoring(so,
-                       cc.genes$s.genes,
-                       cc.genes$g2m.genes)
+                       s_genes_mouse,
+                       g2m_genes_mouse)
 
 cc_scores <- c(
   "Pola1",
@@ -345,10 +360,20 @@ map(c("clusters", "tabula_muris_cell_type"),
     ~plot_umap(so, .x, label_text = TRUE, 
                label_col = "black")) 
 ```
+#### Save object
 
+```{r}
+saveRDS(so, file.path("objects",
+                  "mouse_models",
+                  "shh_model_sobj.rds"))
+```
 #### Get markers
 
 ```{r}
+so <- readRDS(file.path("objects",
+                  "mouse_models",
+                  "shh_model_sobj.rds"))
+
 Idents(so) <- "clusters"
 mkrs <- FindAllMarkers(so, only.pos = TRUE)
 
@@ -358,7 +383,7 @@ write_tsv(mkrs,
 
 mkrs_list <- split(mkrs, mkrs$cluster)
 
-write.xlsx(mkrs_list, 
+write_markers_xlsx(mkrs_list, 
            file.path(mkrs_xlsx_dr,
                      "shh_cluster_markers.xlsx"))
 ```
@@ -366,34 +391,22 @@ write.xlsx(mkrs_list,
 
 ### fix cell type assignments
 
-Cluster 8 expresses `Olig1`, suggesting that these cells are oligodendrocytes. Cluster 10 expresses `Mlc1` suggesting that these are astroglial cells.
-
-Cluster 1 are kidney capillary endothelial cells, which would be brain endothelial cells or perictyes. 
-
-Cluster 4 are macrophages
-
-Cluster 5 are fibroblasts
-
-Cluster 6 are neuroendocrine cells
-
-Cluster 9 are monocytes
-
-Clusters 0, 11, 2, 3, 7 are malignant cells.
 
 ```{r}
 new_ids <- c(
-  '1' = "endothelial",
-  '4' = "macrophages",
-  '5' = "fibroblasts",
-  '6' = "neuroendocrine",
-  '8' = "oligodendrocytes",
-  '9' = "monocytes",
-  '10' = "astroglia",
-  '0' = "malignant",
-  '11' = "malignant",
+  '0' = "endothelial",
+  '5' = "macrophages",
+  '6' = "fibroblasts", # second most correlated cell type
+  '7' = "neuroendocrine", # second most correlated cell type
+  '9' = "oligodendrocytes", #olig1 expression
+  '10' = "monocytes",
+  '11' = "astroglia", # Mlc1 expression
+  '1' = "malignant",
   '2' = "malignant",
   '3' = "malignant",
-  '7' = "malignant"
+  '4' = "malignant",
+  '8' = "malignant",
+  '12' = "malignant"
 )
 
 
@@ -421,8 +434,119 @@ saveRDS(so, file.path("objects",
                   "shh_model_sobj.rds"))
 ```
 
+## Add in Northcutt paper metamodule scores
+
+```{r}
+so <- readRDS(file.path("objects",
+                  "mouse_models",
+                  "shh_model_sobj.rds"))
+
+supp_tbl_2 <- "https://static-content.springer.com/esm/art%3A10.1038%2Fs41586-019-1434-6/MediaObjects/41586_2019_1434_MOESM3_ESM.xlsx"
 
 
+download.file(supp_tbl_2, "../docs/northcutt_sup_tbl_2.xlsx")
+sup_tbl <- read_excel("../docs/northcutt_sup_tbl_2.xlsx", 
+           sheet = 2,
+           skip = 3) 
+
+sup_tbl[, 1] <- NULL
+
+# extract out each metaprogram following their approach of excluding ribosomal
+# and protein genes and non-coding RNAs
+
+mps <- map(seq(1, ncol(sup_tbl), 2), 
+    ~c(.x, .x + 1)) %>% 
+  map(., ~sup_tbl[, .x] 
+      %>% na.omit()) 
+
+mp_names <- map_chr(mps, ~colnames(.x)[2])
+mps <- map(mps, ~.x[, 2, drop = TRUE]) 
+names(mps) <- mp_names
+
+mps <- map(mps, 
+    ~left_join(tibble(gene = .x),
+               orthologs, 
+               by = c("gene" = "external_gene_name")) %>% 
+      pull(mmusculus_homolog_associated_gene_name) %>% 
+      na.omit())
+
+ssh_mps <- mps[str_subset(names(mps), "SHH")]
+for (i in seq_along(ssh_mps)){
+  so <- AddModuleScore(so, 
+                       features = list(c(ssh_mps[[i]])),
+                       ctrl = 50,
+                       name = str_c( names(ssh_mps)[i], "_metafactor"),
+                       seed = 42)
+}
+
+
+shh_mps <- c(
+  "SHH-A_metafactor1",
+  "SHH-B_metafactor1",
+  "SHH-C_metafactor1"
+)
+names(shh_mps) <- paste0("Hovestadt_et_al_", "SHH-", c("A", "B", "C"))
+
+plts <- imap(shh_mps,
+            ~plot_feature(so, 
+               .x, 
+               embedding = "umap", 
+               show_negative = TRUE,
+               minimal_theme = TRUE) + 
+              labs(title = .y))
+
+iwalk(plts, 
+    ~save_plot(file.path(fig_dir, 
+                         paste0("umap_shh_by_", .y, ".pdf")),
+          .x, 
+          base_asp = 1))
+
+```
+
+```{r}
+to_plot <- c(
+  "orig.ident",
+  "clusters",
+  "cell_types",
+  "Phase"
+)
+names(to_plot) <- to_plot
+
+plts <- imap(to_plot,
+            ~plot_feature(so, 
+               .x, 
+               embedding = "umap"))
+
+iwalk(plts, 
+    ~save_plot(file.path(fig_dir, 
+                         paste0("umap_shh_by_", .y, ".pdf")),
+          .x, 
+          base_asp = 1.4))
+
+
+to_plot <- c(
+  "Sox2",
+  "Olig1",
+  "Olig2",
+  "Prom1"
+)
+
+names(to_plot) <- to_plot
+
+plts <- imap(to_plot, 
+    ~plot_umap(so, .x, minimal_theme = TRUE) + 
+      labs(title = .y))
+
+
+iwalk(plts, 
+    ~save_plot(file.path(fig_dir, 
+                         paste0("umap_shh_by_", .y, ".pdf")),
+          .x, 
+          base_asp = 1))
+
+
+
+```
 # GP mouse model
 
 >
@@ -516,7 +640,9 @@ so <- CreateSeuratObject(
   names.field = c(1, 2)
 )
 
-so <- PercentageFeatureSet(so, pattern = "^mt-", col.name = "percent.mt")
+so <- PercentageFeatureSet(so, 
+                           pattern = "^mt-", 
+                           col.name = "percent.mt")
 
 so@meta.data <- so@meta.data %>% 
   tibble::rownames_to_column("cell") %>% 
@@ -527,6 +653,15 @@ so@meta.data <- so@meta.data %>%
 dir.create(file.path("objects",
                      "mouse_models"),
            showWarnings = FALSE)
+
+# add in new sample label
+
+new_expt_labels <- c(
+  "2_MP" = "MYC + DNP53",
+  "3_MG" = "MYC + GFI1"
+)
+
+so@meta.data$expt_ids <- new_expt_labels[as.character(so@meta.data$orig.ident)]
 
 rm(mat)
 a <- gc()
@@ -601,10 +736,11 @@ for(i in seq_along(per_sample)){
 
 ## Filter cells and samples.
 
-Suggest removing cells with > 20% mitochondrial UMIs. 
+Suggest removing cells with > 20% mitochondrial UMIs. Also remove sample `1_Mpcont` which has very few cells 
 
 ```{r}
 so <- subset(so, subset = percent.mt < 20)
+so <- subset(so, subset = orig.ident != "1_Mpcont")
 ```
 
 ## Normalize and embed into 2D with UMAP
@@ -636,15 +772,12 @@ so <- RunUMAP(so,
 
 plts <- list()
 plts[[1]] <- plot_feature(so, "orig.ident", embedding = "umap") 
-plts[2:4] <- plot_features_split(so, 
-                                 "orig.ident", "orig.ident", 
+plts[[2]] <- plot_features_split(so, 
+                                 "expt_ids", "expt_ids", 
                                  embedding = "umap",
                                  cols = discrete_palette_default)
+plts
 
-p <- plot_grid(plotlist = plts, 
-               nrow = 2, 
-               ncol = 2)
-p
 ```
 
 ```{r}
@@ -656,19 +789,26 @@ so$RNA_snn_res.0.32 <- NULL
 
 plts <- list()
 plts[[1]] <- plot_feature(so, "clusters", embedding = "umap") + labs(title = "All samples")
-plts[2:4] <- plot_features_split(so, "clusters", "orig.ident", embedding = "umap", add_title = TRUE)
+plts[[2]] <- plot_features_split(so, "clusters", 
+                                 "expt_ids", embedding = "umap", add_title = TRUE)
 
-p <- plot_grid(plotlist = plts, nrow = 2, ncol = 2)
-p
-
+plts
 ```
 
 Add cell cycle stage
 
 ```{r, fig.width = 12}
+s_genes_mouse <- inner_join(tibble(gene = cc.genes$s.genes),
+                            orthologs, 
+                            by = c("gene" = "external_gene_name")) %>% pull(mmusculus_homolog_associated_gene_name)
+
+g2m_genes_mouse <- inner_join(tibble(gene = cc.genes$s.genes),
+                            orthologs, 
+                            by = c("gene" = "external_gene_name")) %>% pull(mmusculus_homolog_associated_gene_name)
+
 so <- CellCycleScoring(so,
-                       cc.genes$s.genes,
-                       cc.genes$g2m.genes)
+                       s_genes_mouse,
+                       g2m_genes_mouse)
 
 cc_scores <- c(
   "Pola1",
@@ -687,6 +827,23 @@ plt <- plot_grid(plotlist = plts, nrow = 2,
                  ncol = 3)
 plt
 
+
+
+
+to_plot <- c("expt_ids", "Phase", "clusters")
+names(to_plot) <- c("expt_ids", "Phase", "clusters")
+
+plts <- imap(to_plot, 
+    ~plot_umap(so, .x,
+              minimal_theme = TRUE) + 
+              labs(title = .y))  
+
+
+iwalk(plts, 
+    ~save_plot(file.path(fig_dir, 
+                         paste0("umap_gp34_by_", .y, ".pdf")),
+          .x, 
+          base_asp = 1))
 ```
 
 
@@ -728,26 +885,6 @@ map(c("clusters", "tabula_muris_cell_type"),
     ~plot_umap(so, .x, label_text = TRUE, 
                label_col = "black")) 
 ```
-
-#### Get markers
-
-```{r}
-Idents(so) <- "clusters"
-mkrs <- FindAllMarkers(so, only.pos = TRUE)
-
-
-write_tsv(mkrs, 
-          file.path(mkrs_tsv_dir, "mb_models_cluster_markers.tsv"))
-
-mkrs_list <- split(mkrs, mkrs$cluster)
-
-write.xlsx(mkrs_list, 
-           file.path(mkrs_xlsx_dr,
-                     "mb_models_cluster_markers.xlsx"))
-```
-
-
-
 
 
 ### Annotate with gfp/luc reads
@@ -818,10 +955,52 @@ so@meta.data <- so@meta.data %>%
                        `luc-firefly`)) %>% 
   column_to_rownames("cb") 
 
+to_plot <- c("egfp", "luc-firefly")
+names(to_plot) <- c("egfp", "luc-firefly")
 
-map(c("egfp", "luc-firefly"), 
-    ~plot_umap(so, .x))                     
+plts <- imap(to_plot, 
+    ~plot_umap(so, .x))  
+
+
+iwalk(plts, 
+    ~save_plot(file.path(fig_dir, 
+                         paste0("umap_gp34_by_", .y, ".pdf")),
+          .x, 
+          base_asp = 1.2))
+
 ```
+
+
+
+#### Get markers
+
+```{r}
+saveRDS(so,
+        file.path("objects",
+                  "mouse_models",
+                  "mb_models_sobj.rds"))
+```
+
+```{r}
+so <- readRDS( file.path("objects",
+                  "mouse_models",
+                  "mb_models_sobj.rds"))
+Idents(so) <- "clusters"
+mkrs <- FindAllMarkers(so, only.pos = TRUE)
+
+
+write_tsv(mkrs, 
+          file.path(mkrs_tsv_dir, "mb_models_cluster_markers.tsv"))
+
+mkrs_list <- split(mkrs, mkrs$cluster)
+
+write.xlsx(mkrs_list, 
+           file.path(mkrs_xlsx_dr,
+                     "mb_models_cluster_markers.xlsx"))
+```
+
+
+
 
 
 ### fix cell type assignments
@@ -829,27 +1008,60 @@ map(c("egfp", "luc-firefly"),
 
 ```{r}
 new_ids <- c(
-  '10' = "endothelial",
-  '12' = "neuroendocrine",
-  '7' = "monocytes",
-  '9' = "t-cells",
-  '11' = "granulocyte",
+  '5' = "monocytes",
+  '9' = "CTLA4+ t-cells",
+  '11' = "endothelial",
   '0' = 'malignant',
   '1' = 'malignant',
   '2' = 'malignant',
   '3' = 'malignant',
-  '5' = 'malignant',
+  '4' = 'neuroendocrine-malignant', # also expresses luc-firefly
   '6' = 'malignant',
+  '7' = 'malignant',
   '8' = 'malignant',
-  '4' = "malignant"
+  '10' = 'malignant'
   )
 
 
-so@meta.data$cell_types <- new_ids[so@meta.data$clusters]
+so@meta.data$cell_types <- new_ids[as.character(so@meta.data$clusters)]
 
 map(c("clusters", "cell_types"), 
     ~plot_umap(so, .x, label_text = TRUE, 
                label_col = "black")) 
+
+
+
+to_plot <- c("cell_types", "clusters", "expt_ids")
+names(to_plot) <- c("cell_types", "clusters", "expt_ids")
+
+plts <- imap(to_plot, 
+    ~plot_umap(so, .x))  
+
+
+iwalk(plts, 
+    ~save_plot(file.path(fig_dir, 
+                         paste0("umap_gp34_by_", .y, ".pdf")),
+          .x, 
+          base_asp = 1.4))
+
+to_plot <- c(
+  "Nrl",
+  "Eomes",
+  "Myc"
+)
+
+names(to_plot) <- to_plot
+
+plts <- imap(to_plot, 
+    ~plot_umap(so, .x, minimal_theme = TRUE) + 
+      labs(title = .y))
+
+
+iwalk(plts, 
+    ~save_plot(file.path(fig_dir, 
+                         paste0("umap_gp34_by_", .y, ".pdf")),
+          .x, 
+          base_asp = 1))
 
 ```
 
@@ -870,6 +1082,74 @@ saveRDS(so,
                   "mb_models_sobj.rds"))
 ```
 
+## Add in Northcutt paper metamodule scores
+
+```{r}
+so <- readRDS(file.path("objects",
+                  "mouse_models",
+                  "mb_models_sobj.rds"))
+
+supp_tbl_2 <- "https://static-content.springer.com/esm/art%3A10.1038%2Fs41586-019-1434-6/MediaObjects/41586_2019_1434_MOESM3_ESM.xlsx"
+
+
+download.file(supp_tbl_2, "../docs/northcutt_sup_tbl_2.xlsx")
+sup_tbl <- read_excel("../docs/northcutt_sup_tbl_2.xlsx", 
+           sheet = 2,
+           skip = 3) 
+
+sup_tbl[, 1] <- NULL
+
+# extract out each metaprogram following their approach of excluding ribosomal
+# and protein genes and non-coding RNAs
+
+mps <- map(seq(1, ncol(sup_tbl), 2), 
+    ~c(.x, .x + 1)) %>% 
+  map(., ~sup_tbl[, .x] 
+      %>% na.omit()) 
+
+mp_names <- map_chr(mps, ~colnames(.x)[2])
+mps <- map(mps, ~.x[, 2, drop = TRUE]) 
+names(mps) <- mp_names
+
+mps <- map(mps, 
+    ~left_join(tibble(gene = .x),
+               orthologs, 
+               by = c("gene" = "external_gene_name")) %>% 
+      pull(mmusculus_homolog_associated_gene_name) %>% 
+      na.omit())
+
+gp34_mps <- mps[str_subset(names(mps), "Group")]
+for (i in seq_along(gp34_mps)){
+  so <- AddModuleScore(so, 
+                       features = list(c(gp34_mps[[i]])),
+                       ctrl = 50,
+                       name = str_c( names(gp34_mps)[i], "_metafactor"),
+                       seed = 42)
+}
+
+gp34_mps <- c(
+  "Group 3/4-A_metafactor1",
+  "Group 3/4-B_metafactor1",
+  "Group 3/4-C_metafactor1"
+)
+
+names(gp34_mps) <- paste0("Hovestadt_et_al_", "Group 3 and 4-", c("A", "B", "C"))
+
+plts <- imap(gp34_mps,
+            ~plot_feature(so, 
+               .x, 
+               embedding = "umap", 
+               show_negative = TRUE,
+               minimal_theme = TRUE) + 
+              labs(title = .y))
+
+iwalk(plts, 
+    ~save_plot(file.path(fig_dir, 
+                         paste0("umap_gp34_by_", .y, ".pdf")),
+          .x, 
+          base_asp = 1))
+
+```
 
 ## Combine datasets 
 

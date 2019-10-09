@@ -118,6 +118,112 @@ write_markers_xlsx(split(mkrs, mkrs$cluster),
                    file.path(xcel_dir, "harmony_markers_gp34.xlsx"))
 ```
 
+## GO terms
+
+```{r}
+library(gprofiler2)
+library(ggrepel)
+mkrs <- read_tsv(file.path(mkrs_dir, 
+                    "harmony_markers_gp34.tsv")) %>% 
+  filter( p_val_adj < 0.05)
+
+mkrs_split <- split(mkrs, mkrs$cluster) %>% 
+  map(~pull(.x, gene))
+go_res <- gost(mkrs_split, 
+               ordered_query = TRUE,
+               sources = c("GO", 
+                          "KEGG", 
+                          "REAC", 
+                          "TF"))
+
+
+go_res[["result"]] %>% 
+  mutate(parents = unlist(map(parents, 
+                              ~str_c(.x, collapse = ",")))) %>% 
+  write_tsv(file.path(tbls_dir, "goterms_gp34_clusters.tsv"))
+
+go_res[["result"]] %>% 
+  mutate(parents = unlist(map(parents, 
+                              ~str_c(.x, collapse = ","))),
+         source = str_replace_all(source, 
+                                  "[[:punct:]]", " ")) %>% 
+  select(-significant) %>% 
+  split(., .$query) %>% 
+  openxlsx::write.xlsx(., file.path(tbls_dir, "goterms_gp34_cluster.xlsx"))
+```
+
+## Heatmap of gene expression
+
+```{r}
+topx <- read_tsv(file.path(mkrs_dir, 
+                    "harmony_markers_gp34.tsv")) %>% 
+  filter(p_val_adj < 0.05,
+         cluster %in% as.character(c(0:5))) %>% 
+  group_by(cluster) %>% 
+  arrange(p_val_adj, .by_group = TRUE) %>% 
+  slice(1:10)
+
+so <- ScaleData(so, features = rownames(so))
+
+tmp_so <- subset(so, 
+                 subset = coarse_clusters_gp34_harmony %in% as.character(c(0:5)))
+
+tmp_so$coarse_clusters_gp34_harmony <- factor(tmp_so$coarse_clusters_gp34_harmony)
+
+p <- DoHeatmap(tmp_so, 
+               group.colors = discrete_palette_default,
+               features = unique(topx$gene),
+               group.by = "coarse_clusters_gp34_harmony",
+               angle = 0, 
+               raster = FALSE, 
+               draw.lines = TRUE)
+
+p <- p +
+  scale_fill_gradientn(colours = viridis::viridis(256),
+                       name = "Expression\nZ-scores")
+
+save_plot(file.path(fig_dir, "heatmap_markers_gp34.pdf"), 
+          p,
+          base_width = 10,
+          base_height = 12)
+
+
+```
+
+## Heatmap by TF activity
+
+```{r}
+so_tf_markers <- read_tsv("tables/gp34_tf_activities.tsv")
+
+topx <- so_tf_markers %>% 
+  filter(cluster %in% as.character(c(0:5))) %>% 
+  group_by(cluster) %>% 
+  arrange(p_val_adj, .by_group = TRUE) %>% 
+  slice(1:5)
+
+DefaultAssay(tmp_so) <- "TF"
+tmp_so <- ScaleData(tmp_so)
+
+p <- DoHeatmap(tmp_so, 
+               group.colors = discrete_palette_default,
+        features = unique(topx$gene),
+        group.by = "coarse_clusters_gp34_harmony",
+        angle = 0, 
+        raster = FALSE, 
+        draw.lines = TRUE)
+
+p <- p +
+  scale_fill_gradientn(colours = viridis::viridis(256),
+                       name = "Regulon AUC\nZ-scores")
+
+save_plot(file.path(fig_dir, "heatmap_tfs_gp34.pdf"), 
+          p,
+          base_width = 10,
+          base_height = 6)
+
+rm(tmp_so)
+DefaultAssay(so) <- "RNA"
+```
 
 ## Add in Northcutt paper metamodule scores
 
@@ -164,6 +270,51 @@ so <- CellCycleScoring(so,
 ```
 
 
+## Save object and write out matrix for other tools
+
 ```{r}
 saveRDS(so, "objects/gp34.rds")
+```
+
+```{r}
+so <-readRDS("objects/gp34.rds")
+
+#full count matrix
+GetAssayData(so, "counts") %>% 
+  as.matrix(.) %>% 
+  as.data.frame() %>% 
+  rownames_to_column("gene") %>% 
+  write_tsv("tables/gp34_count_matrix.tsv.gz")
+  
+# expression matrix filtered at least 25 cells express the gene
+expr_mat <- GetAssayData(so, "data")
+expr_mat <- expr_mat[Matrix::rowSums(expr_mat > 0) >= 25, ]
+
+expr_mat %>% 
+  as.matrix(.) %>% 
+  as.data.frame() %>% 
+  rownames_to_column("gene") %>% 
+  write_tsv("tables/gp34_expr_matrix.tsv.gz")
+  
+```
+
+save loom file for paga
+
+```{r}
+
+# drop graphs see https://github.com/theislab/scanpy/issues/598
+tmp_obj <- readRDS("objects/gp34.rds")
+tmp_obj@graphs <- list()
+tmp_obj@meta.data <- tmp_obj@meta.data[, c("coarse_clusters_gp34_harmony",
+                                           "orig.ident",
+                                           "subtype",
+                                           "subgroup",
+                                           "UPN")]
+
+lfile <- as.loom(tmp_obj,filename = file.path("objects", "grp34.loom"),
+        verbose = TRUE,
+        overwrite = TRUE)
+lfile$close_all()
+
+rm(tmp_obj)
 ```

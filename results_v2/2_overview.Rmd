@@ -339,10 +339,10 @@ iwalk(plts,
 
 ```{r}
 famous_genes <- c(
-  "MYCN",
-  "GLI2",
-  "SOX2",
-  "BOC"
+  "EOMES",
+  "LEMD1",
+  "UNC5D",
+  "EPHA8"
 )
 
 plts <- map(famous_genes,
@@ -472,29 +472,27 @@ iwalk(plts,
 
 ```
 
-### plot putative stem markers from mouse SHH Cancel cell paper
+### plot various gnes
 
 Most of the tSNE plots show really sparse and low expression of these genes. Not sure how reliable those finding are. 
 
 ```{r}
-stem_mkrs <- c(
-  "PROM1",
-  "SOX2",
-  "OLIG1",
-  "OLIG2",
-  "NES",
-  "HES1",
-  "MYCN",
-  "BOC",
-  "GLI2"
+
+famous_genes <- c(
+  "EOMES",
+  "MYC",
+  "NRL",
+  "TOP2A",
+  "CRX",
+  "ROM1"
 )
 
-plts <- map(stem_mkrs,
+plts <- map(famous_genes,
             ~plot_feature(so, 
                .x, 
                embedding = "umap_harmony", 
                minimal_theme = TRUE) )
-names(plts) <- stem_mkrs
+names(plts) <- famous_genes
 iwalk(plts, 
     ~save_plot(file.path(fig_dir, 
                          paste0("umap_gp34_by_", .y, ".pdf")),
@@ -503,8 +501,29 @@ iwalk(plts,
 ```
 
 
+```{r}
 
+p <- plot_features_split(so, 
+                    "coarse_clusters_gp34_harmony",
+                    "subgroup",
+                    embedding = "umap_harmony",
+                    label_text = TRUE,
+                    label_size = 4,
+                    minimal_theme = TRUE) +
+  labs(x = "UMAP_1",
+       y = "UMAP_2",
+       title = "") +
+  theme(legend.position = "none")
 
+p
+
+save_plot(file.path(fig_dir, 
+                         paste0("umap_gp34_by_cluster_split.pdf")),
+          p, 
+          base_asp = 1,
+          nrow = 1, 
+          ncol = 3)
+```
 
 ## Examine factorization approaches
 

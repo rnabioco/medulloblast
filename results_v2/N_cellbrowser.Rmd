@@ -9,9 +9,11 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## Cellbrowser
+ Cellbrowser
 
 Format seurat object into a cellbrowser directory suitable for html browser. 
+
+# All cells
 
 ```{r}
 source("../R/utils.R")
@@ -32,7 +34,7 @@ cols_to_keep <- c(
   `subgroup` = "subgroup",
   `Dx` = "Dx",
   `UPN` = "UPN",
-  cell_type = "coarse_cell_type")
+   cell_type = "coarse_cell_type")
 so@meta.data <- so@meta.data[, cols_to_keep]
 colnames(so@meta.data) <- names(cols_to_keep)
 Idents(so) <- "clusters"
@@ -45,6 +47,7 @@ Idents(so) <- "clusters"
 ```{r}
 ## default palette (see ../../R/utils.R)
 col_palette <- discrete_palette_default
+short_col_palette <- palette_OkabeIto
 
 ## summarize per cluster annotations
 to_map <- c("clusters",
@@ -64,11 +67,11 @@ tmp <- col_palette[1:length(col_map$UPN)]
 names(tmp) <- col_map$UPN
 res$UPN <- tmp 
   
-tmp <- col_palette[1:length(col_map$subgroup)]
+tmp <- short_col_palette[1:length(col_map$subgroup)]
 names(tmp) <- col_map$subgroup
 res$subgroup <- tmp 
 
-tmp <- col_palette[1:length(col_map$cell_type)]
+tmp <- short_col_palette[1:length(col_map$cell_type)]
 names(tmp) <- col_map$cell_type
 res$cell_type <- tmp 
 
@@ -113,7 +116,7 @@ echo -e '\ncolors="/Users/kriemo/Projects/sc_repos/medulloblast/results_v2/cellb
 
 
 
-## Malignant clusters
+# Malignant
 
 ```{r}
 so <- readRDS(file.path("objects", "all_neoplastic.rds"))
@@ -145,6 +148,7 @@ Idents(so) <- "subgroup"
 ```{r}
 ## default palette (see ../../R/globals.R)
 col_palette <- discrete_palette_default
+short_col_palette <- palette_OkabeIto
 
 ## summarize per cluster annotations
 to_map <- c("clusters",
@@ -165,15 +169,15 @@ tmp <- col_palette[1:length(col_map$UPN)]
 names(tmp) <- col_map$UPN
 res$UPN <- tmp 
   
-tmp <- col_palette[1:length(col_map$subtype)]
+tmp <- short_col_palette[1:length(col_map$subtype)]
 names(tmp) <- col_map$subtype
 res$subtype <- tmp 
 
-tmp <- col_palette[1:length(col_map$subgroup)]
+tmp <- short_col_palette[1:length(col_map$subgroup)]
 names(tmp) <- col_map$subgroup
 res$subgroup <- tmp 
 
-tmp <- col_palette[1:length(col_map$cell_type)]
+tmp <- short_col_palette[1:length(col_map$cell_type)]
 names(tmp) <- col_map$cell_type
 res$cell_type <- tmp 
 
@@ -186,8 +190,6 @@ map_dfr(res,
 
 ```
 
-
-Build cellbrowser objects. Note requires UCSC (`cellbrowser python package`[ https://cellbrowser.readthedocs.io/index.html])
 
 ```{r}
 dir.create("cellbrowser/markers", recursive = TRUE)
@@ -204,7 +206,7 @@ do.call(function(...) {ExportToCellbrowser(so,
                     reductions = c("umap"),
                     markers.file = "cellbrowser/markers/malignant_cluster_markers.tsv",
                     cluster.field = "subgroup",
-                    skip.expr.matrix = FALSE,
+                    skip.expr.matrix = TRUE,
                     ...)}, 
         as.list(cols))
 
@@ -218,10 +220,251 @@ echo -e '\ncolors="/Users/kriemo/Projects/sc_repos/medulloblast/results_v2/cellb
 ```
 
 
-## Immune populations
+
+# SHH subgroup
+
+```{r}
+so <- readRDS(file.path("objects", "shh.rds"))
+```
+
+Simplify object metadata to make interpretable
+
+```{r}
+cols <- colnames(so@meta.data)
+cols_to_keep <- c(
+  `genes per cell` = "nFeature_RNA",
+  `UMIs per cell` = "nCount_RNA",
+  `percent of UMIs as mitochondria` = "percent.mt",
+  `clusters_unaligned` = "coarse_clusters_shh",
+  `clusters_aligned` = "coarse_clusters_shh_harmony",
+  `subgroup` = "subgroup",
+  `subtype` = "subtype",
+  `Dx` = "Dx",
+  `UPN` = "UPN",
+   cell_type = "coarse_cell_type",
+   `cell cycle phase` = "Phase",
+  "Northcutt_MetaProgam_A" = "SHH-A_metafactor1",
+  "Northcutt_MetaProgam_B" = "SHH-B_metafactor1",
+  "Northcutt_MetaProgam_C" = "SHH-C_metafactor1")
+
+so@meta.data <- so@meta.data[, cols_to_keep]
+colnames(so@meta.data) <- names(cols_to_keep)
+Idents(so) <- "coarse_clusters_shh_harmony"
+
+```
 
 
-## Malignant clusters
+## Set colors
+
+```{r}
+## default palette (see ../../R/globals.R)
+col_palette <- discrete_palette_default
+short_col_palette <- palette_OkabeIto
+
+## summarize per cluster annotations
+to_map <- c("clusters_unaligned",
+            "clusters_aligned",
+            "subtype",
+            "UPN",
+            "cell_type",
+            "subgroup",
+            "cell cycle phase")
+col_map <- as.list(so@meta.data[, to_map]) %>%
+      map(~as.character(unique(.x)))
+
+res <- list()
+
+tmp <- col_palette[1:length(col_map$clusters_unaligned)]
+names(tmp) <- col_map$clusters_unaligned
+res$clusters_unaligned <- tmp 
+
+tmp <- col_palette[1:length(col_map$clusters_aligned)]
+names(tmp) <- col_map$clusters_aligned
+res$clusters_aligned <- tmp 
+
+tmp <- col_palette[1:length(col_map$UPN)]
+names(tmp) <- col_map$UPN
+res$UPN <- tmp 
+  
+tmp <- short_col_palette[1:length(col_map$subtype)]
+names(tmp) <- col_map$subtype
+res$subtype <- tmp 
+
+tmp <- short_col_palette[1:length(col_map$subgroup)]
+names(tmp) <- col_map$subgroup
+res$subgroup <- tmp 
+
+tmp <- short_col_palette[1:length(col_map$cell_type)]
+names(tmp) <- col_map$cell_type
+res$cell_type <- tmp 
+
+tmp <- short_col_palette[1:length(col_map$`cell cycle phase`)]
+names(tmp) <- col_map$`cell cycle phase`
+res$`cell cycle phase` <- tmp 
+
+map_dfr(res, 
+        ~tibble(clusterName = names(.x), 
+                color = .x)) %>% 
+  as.data.frame() %>% 
+  write_csv("cellbrowser/malignant_shh_colorMap.csv", col_names = F, quote_escape = "none")
+
+```
+
+
+```{r}
+dir.create("cellbrowser/markers", recursive = TRUE)
+cols <- colnames(so@meta.data)
+names(cols) <- colnames(so@meta.data)
+
+mkrs <- read_tsv("markers/harmony_markers_shh.tsv") %>% 
+  select(cluster, gene, p_val_adj, everything())
+
+write_tsv(mkrs, "cellbrowser/markers/malignant_shh_cluster_markers.tsv")
+
+do.call(function(...) {ExportToCellbrowser(so, 
+                    dir = file.path("cellbrowser",
+                                    "medulloblastoma_neoplastic_shh"),
+                    dataset.name = "medulloblastoma_neoplastic_shh",
+                    reductions = c("umap", "umap_harmony"),
+                    markers.file = "cellbrowser/markers/malignant_shh_cluster_markers.tsv",
+                    cluster.field = "clusters_aligned",
+                    skip.expr.matrix = FALSE,
+                    ...)}, 
+        as.list(cols))
+
+```
+
+
+
+```{bash}
+cd cellbrowser
+echo -e '\ncolors="/Users/kriemo/Projects/sc_repos/medulloblast/results_v2/cellbrowser/malignant_shh_colorMap.csv"' >> medulloblastoma_neoplastic_shh/cellbrowser.conf
+```
+
+# Gp3 3/4 4 subgroups
+
+
+```{r}
+so <- readRDS(file.path("objects", "gp34.rds"))
+```
+
+Simplify object metadata to make interpretable
+
+```{r}
+cols <- colnames(so@meta.data)
+cols_to_keep <- c(
+  `genes per cell` = "nFeature_RNA",
+  `UMIs per cell` = "nCount_RNA",
+  `percent of UMIs as mitochondria` = "percent.mt",
+  `clusters_unaligned` = "coarse_clusters_gp34",
+  `clusters_aligned` = "coarse_clusters_gp34_harmony",
+  `subgroup` = "subgroup",
+  `subtype` = "subtype",
+  `Dx` = "Dx",
+  `UPN` = "UPN",
+   cell_type = "coarse_cell_type",
+   `cell cycle phase` = "Phase",
+  "Northcutt_MetaProgam_A" = "Group 3/4-A_metafactor1",
+  "Northcutt_MetaProgam_B" = "Group 3/4-B_metafactor1",
+  "Northcutt_MetaProgam_C" = "Group 3/4-C_metafactor1")
+
+so@meta.data <- so@meta.data[, cols_to_keep]
+colnames(so@meta.data) <- names(cols_to_keep)
+Idents(so) <- "coarse_clusters_gp34_harmony"
+
+```
+
+
+## Set colors
+
+```{r}
+## default palette (see ../../R/globals.R)
+col_palette <- discrete_palette_default
+short_col_palette <- palette_OkabeIto
+
+## summarize per cluster annotations
+to_map <- c("clusters_unaligned",
+            "clusters_aligned",
+            "subtype",
+            "UPN",
+            "cell_type",
+            "subgroup",
+            "cell cycle phase")
+col_map <- as.list(so@meta.data[, to_map]) %>%
+      map(~as.character(unique(.x)))
+
+res <- list()
+
+tmp <- col_palette[1:length(col_map$clusters_unaligned)]
+names(tmp) <- col_map$clusters_unaligned
+res$clusters_unaligned <- tmp 
+
+tmp <- col_palette[1:length(col_map$clusters_aligned)]
+names(tmp) <- col_map$clusters_aligned
+res$clusters_aligned <- tmp 
+
+tmp <- col_palette[1:length(col_map$UPN)]
+names(tmp) <- col_map$UPN
+res$UPN <- tmp 
+  
+tmp <- short_col_palette[1:length(col_map$subtype)]
+names(tmp) <- col_map$subtype
+res$subtype <- tmp 
+
+tmp <- short_col_palette[1:length(col_map$subgroup)]
+names(tmp) <- col_map$subgroup
+res$subgroup <- tmp 
+
+tmp <- short_col_palette[1:length(col_map$cell_type)]
+names(tmp) <- col_map$cell_type
+res$cell_type <- tmp 
+
+tmp <- short_col_palette[1:length(col_map$`cell cycle phase`)]
+names(tmp) <- col_map$`cell cycle phase`
+res$`cell cycle phase` <- tmp 
+
+map_dfr(res, 
+        ~tibble(clusterName = names(.x), 
+                color = .x)) %>% 
+  as.data.frame() %>% 
+  write_csv("cellbrowser/malignant_gp34_colorMap.csv", col_names = F, quote_escape = "none")
+
+```
+
+
+```{r}
+dir.create("cellbrowser/markers", recursive = TRUE)
+cols <- colnames(so@meta.data)
+names(cols) <- colnames(so@meta.data)
+
+mkrs <- read_tsv("markers/harmony_markers_gp34.tsv") %>% 
+  select(cluster, gene, p_val_adj, everything())
+
+write_tsv(mkrs, "cellbrowser/markers/malignant_gp34_cluster_markers.tsv")
+
+do.call(function(...) {ExportToCellbrowser(so, 
+                    dir = file.path("cellbrowser",
+                                    "medulloblastoma_neoplastic_gp34"),
+                    dataset.name = "medulloblastoma_neoplastic_gp34",
+                    reductions = c("umap", "umap_harmony"),
+                    markers.file = "cellbrowser/markers/malignant_gp34_cluster_markers.tsv",
+                    cluster.field = "clusters_aligned",
+                    skip.expr.matrix = FALSE,
+                    ...)}, 
+        as.list(cols))
+
+```
+
+
+
+```{bash}
+cd cellbrowser
+echo -e '\ncolors="/Users/kriemo/Projects/sc_repos/medulloblast/results_v2/cellbrowser/malignant_gp34_colorMap.csv"' >> medulloblastoma_neoplastic_gp34/cellbrowser.conf
+```
+
+
+# Immune populations
+
 
 ```{r}
 sobj <- readRDS(file.path("objects", "immune_sobj.rds"))
@@ -256,7 +499,7 @@ dir.create(outdir, showWarnings = FALSE)
 saveRDS(sobj,file.path(outdir, "cb.rds"))
 ```
 
-## Set colors
+### Set colors
 
 ```{r}
 ## default palette (see ../../R/globals.R)
@@ -336,12 +579,15 @@ echo -e '\ncolors="/Users/kriemo/Projects/sc_repos/medulloblast/results/cellbrow
 
 
 
+
+# Build all 
+
 ```{bash}
 cd cellbrowser
 /miniconda3/bin/cbBuild \
 -i medulloblastoma/cellbrowser.conf \
--i medulloblastoma_malignant/cellbrowser.conf \
--i medulloblastoma_normal/cellbrowser.conf \
--i ../mouse_model/cellbrowser/mouse_medulloblastoma/cellbrowser.conf \
+-i medulloblastoma_neoplastic/cellbrowser.conf \
+-i medulloblastoma_neoplastic_shh/cellbrowser.conf \
+-i medulloblastoma_neoplastic_gp34/cellbrowser.conf \
 -o mblast 
 ```
