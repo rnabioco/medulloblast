@@ -1,0 +1,272 @@
+---
+title: "Format UCSC cellbrowser"
+author: "Kent Riemondy RBI"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Format seurats object into a UCSC cellbrowser. Note requires UCSC (`cellbrowser python package`[ https://cellbrowser.readthedocs.io/index.html]) 
+
+```{r}
+source("../R/utils.R")
+library(tidyverse)
+#dir.create("cellbrowser")
+
+cb_outdir <- "cellbrowser_test"
+```
+
+# All cells
+
+```{r}
+so <- readRDS(file.path("objects", "so.rds"))
+
+cols_to_keep <- c(
+  `genes per cell` = "nFeature_RNA",
+  `UMIs per cell` = "nCount_RNA",
+  `percent of UMIs as mitochondria` = "percent.mt",
+  `clusters` = "coarse_clusters",
+  `subgroup` = "subgroup",
+  `Dx` = "Dx",
+  `UPN` = "UPN",
+   cell_type = "coarse_cell_type")
+
+make_cellbrowser(so, 
+                 column_list = cols_to_keep,
+                 secondary_cols = c(
+                    "subgroup",
+                    "cell_type"), 
+                 project = "medulloblastoma",
+                 outdir = cb_outdir,
+                 marker_file = "markers/coarse_cluster_markers_all_data.tsv",
+                 ident = "clusters"
+                 )
+```
+
+
+# Malignant only 
+
+```{r}
+so <- readRDS(file.path("objects", "all_neoplastic.rds"))
+
+cols_to_keep <- c(
+  `genes per cell` = "nFeature_RNA",
+  `UMIs per cell` = "nCount_RNA",
+  `percent of UMIs as mitochondria` = "percent.mt",
+  `clusters` = "coarse_clusters_malignant",
+  `subgroup` = "subgroup",
+  `subtype` = "subtype",
+  `Dx` = "Dx",
+  `UPN` = "UPN",
+  cell_type = "coarse_cell_type")
+
+make_cellbrowser(so, 
+                 column_list = cols_to_keep,
+                 secondary_cols = c(
+            "subtype",
+            "cell_type",
+            "subgroup"), 
+                 project = "medulloblastoma_neoplastic",
+                 outdir = cb_outdir,
+                 marker_file = "markers/subgroup_markers_neoplastic.tsv",
+                 ident = "subgroup"
+                 )
+```
+
+
+# SHH subgroup
+
+```{r}
+so <- readRDS(file.path("objects", "shh.rds"))
+
+cols_to_keep <- c(
+  `genes per cell` = "nFeature_RNA",
+  `UMIs per cell` = "nCount_RNA",
+  `percent of UMIs as mitochondria` = "percent.mt",
+  `clusters_unaligned` = "coarse_clusters_shh",
+  `clusters_aligned` = "coarse_clusters_shh_harmony",
+  `subgroup` = "subgroup",
+  `subtype` = "subtype",
+  `Dx` = "Dx",
+  `UPN` = "UPN",
+   cell_type = "coarse_cell_type",
+   `cell cycle phase` = "Phase",
+  "Northcutt_MetaProgam_A" = "SHH-A_metafactor1",
+  "Northcutt_MetaProgam_B" = "SHH-B_metafactor1",
+  "Northcutt_MetaProgam_C" = "SHH-C_metafactor1")
+
+
+make_cellbrowser(so, 
+                 column_list = cols_to_keep,
+                 secondary_cols = 
+                   c("subtype",
+                     "cell_type",
+                     "subgroup",
+                     "cell cycle phase"), 
+                 project = "medulloblastoma_neoplastic_shh",
+                 outdir = cb_outdir,
+                 marker_file = "markers/harmony_markers_shh.tsv",
+                 ident = "clusters_aligned"
+)
+```
+
+
+# Gp3 3/4 4 subgroups
+
+
+```{r}
+so <- readRDS(file.path("objects", "gp34.rds"))
+
+cols_to_keep <- c(
+  `genes per cell` = "nFeature_RNA",
+  `UMIs per cell` = "nCount_RNA",
+  `percent of UMIs as mitochondria` = "percent.mt",
+  `clusters_unaligned` = "coarse_clusters_gp34",
+  `clusters_aligned` = "coarse_clusters_gp34_harmony",
+  `subgroup` = "subgroup",
+  `subtype` = "subtype",
+  `Dx` = "Dx",
+  `UPN` = "UPN",
+   cell_type = "coarse_cell_type",
+   `cell cycle phase` = "Phase",
+  "Northcutt_MetaProgam_A" = "Group 3/4-A_metafactor1",
+  "Northcutt_MetaProgam_B" = "Group 3/4-B_metafactor1",
+  "Northcutt_MetaProgam_C" = "Group 3/4-C_metafactor1")
+
+
+make_cellbrowser(so, 
+                 column_list = cols_to_keep,
+                 secondary_cols = 
+                   c("subtype",
+                     "cell_type",
+                     "subgroup",
+                     "cell cycle phase"), 
+                 project = "medulloblastoma_neoplastic_gp34",
+                 outdir = cb_outdir,
+                 marker_file = "markers/harmony_markers_gp34.tsv",
+                 ident = "clusters_aligned"
+)
+```
+
+
+# Immune populations
+
+
+```{r}
+so <- readRDS(file.path("objects", "immune_so.rds"))
+
+cols_to_keep <- c(
+  `genes per cell` = "nFeature_RNA",
+  `UMIs per cell` = "nCount_RNA",
+  `percent of UMIs as mitochondria` = "percent.mt",
+  `clusters` = "fine_immune_clusters",
+  `subgroup` = "subgroup",
+  `Dx` = "Dx",
+  `UPN` = "UPN",
+  cell_type_fine = "fine_cell_type_ids",
+  hpca_cell_type_coarse = "hpca_cell_types",
+  hpca_cell_type_fine = "hpca_fine_cell_types")
+
+make_cellbrowser(so, 
+                 column_list = cols_to_keep,
+                 secondary_cols = c(
+                   "hpca_cell_type_coarse",
+                   "hpca_cell_type_fine",
+                   "subgroup"), 
+                 project = "medulloblastoma_immune",
+                 outdir = cb_outdir,
+                 marker_file = "markers/immune_subset_cluster_markers.tsv",
+                 ident = "clusters"
+)
+```
+
+
+# Mouse model (SHH)
+
+```{r}
+so <- readRDS( file.path("objects",
+                  "mouse_models",
+                  "shh_model_sobj.rds"))
+
+cols_to_keep <- c(
+  `genes per cell` = "nFeature_RNA",
+  `UMIs per cell` = "nCount_RNA",
+  `percent of UMIs as mitochondria` = "percent.mt",
+  `clusters` = "clusters",
+  `sample` = "orig.ident",
+   cell_type = "cell_types",
+  `cell cycle phase` = "Phase")
+
+make_cellbrowser(so, 
+                 column_list = cols_to_keep,
+                 secondary_cols = c(
+            "sample",
+            "cell_type",
+            "cell cycle phase"), 
+                 project = "medulloblastoma_shh_mouse_model",
+                 outdir = cb_outdir,
+                 marker_file = "markers/mouse_models/tsv/shh_cluster_markers.tsv",
+                 ident = "clusters"
+)
+```
+
+# Mouse model (Gp34)
+
+```{r}
+so <- readRDS(file.path("objects",
+                  "mouse_models",
+                  "mb_models_sobj.rds"))
+
+cols_to_keep <- c(
+  `genes per cell` = "nFeature_RNA",
+  `UMIs per cell` = "nCount_RNA",
+  `percent of UMIs as mitochondria` = "percent.mt",
+  `clusters` = "clusters",
+  `sample` = "expt_ids",
+   cell_type = "cell_types",
+   `cell cycle phase` = "Phase",
+   firefly_expression = "luc-firefly",
+   egfp_expression = "egfp"
+  )
+
+make_cellbrowser(so, 
+                 column_list = cols_to_keep,
+                 secondary_cols = c(
+                    "sample",
+                    "cell_type",
+                    "cell cycle phase"), 
+                 project = "medulloblastoma_gp34_mouse_models",
+                 outdir = "cellbrowser_test",
+                 marker_file = "markers/mouse_models/tsv/mb_models_cluster_markers.tsv",
+                 ident = "clusters"
+                 )
+```
+
+# Build all 
+
+```{r}
+datasets <- c(
+  "medulloblastoma/cellbrowser.conf",
+  "medulloblastoma_neoplastic/cellbrowser.conf",
+  "medulloblastoma_neoplastic_shh/cellbrowser.conf",
+  "medulloblastoma_neoplastic_gp34/cellbrowser.conf",
+  "medulloblastoma_gp34_mouse_models/cellbrowser.conf",
+  "medulloblastoma_shh_mouse_model/cellbrowser.conf",
+  "medulloblastoma_immune/cellbrowser.conf"
+)
+
+datasets <- file.path(cb_outdir, datasets)
+
+build_cellbrowser(datasets, outdir = file.path(cb_outdir, "mblast"))
+```
+
+```{r, eval = FALSE}
+
+build_cellbrowser(datasets, outdir = file.path(cb_outdir, "mblast"), port = 8888)
+```
+
+

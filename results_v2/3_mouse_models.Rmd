@@ -988,7 +988,6 @@ so <- readRDS( file.path("objects",
 Idents(so) <- "clusters"
 mkrs <- FindAllMarkers(so, only.pos = TRUE)
 
-
 write_tsv(mkrs, 
           file.path(mkrs_tsv_dir, "mb_models_cluster_markers.tsv"))
 

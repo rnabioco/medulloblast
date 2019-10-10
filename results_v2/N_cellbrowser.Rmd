@@ -13,12 +13,15 @@ knitr::opts_chunk$set(echo = TRUE)
 
 Format seurat object into a cellbrowser directory suitable for html browser. 
 
-# All cells
-
 ```{r}
 source("../R/utils.R")
 library(tidyverse)
 dir.create("cellbrowser")
+```
+
+# All cells
+
+```{r}
 so <- readRDS(file.path("objects", "so.rds"))
 ```
 
@@ -467,51 +470,47 @@ echo -e '\ncolors="/Users/kriemo/Projects/sc_repos/medulloblast/results_v2/cellb
 
 
 ```{r}
-sobj <- readRDS(file.path("objects", "immune_sobj.rds"))
+so <- readRDS(file.path("objects", "immune_so.rds"))
 ```
 
 Simplify object metadata to make interpretable
 
 ```{r}
-cols <- colnames(sobj@meta.data)
+cols <- colnames(so@meta.data)
 cols_to_keep <- c(
   `genes per cell` = "nFeature_RNA",
   `UMIs per cell` = "nCount_RNA",
   `percent of UMIs as mitochondria` = "percent.mt",
-  `clusters` = "RNA_snn_res.0.05",
-  `subtype` = "subgroup",
+  `clusters` = "fine_immune_clusters",
+  `subgroup` = "subgroup",
   `Dx` = "Dx",
   `UPN` = "UPN",
-  cell_type = "cell_type",
-  cell_phenotype = "cell_phenotype")
-sobj@meta.data <- sobj@meta.data[, cols_to_keep]
-colnames(sobj@meta.data) <- names(cols_to_keep)
-Idents(sobj) <- "clusters"
+  cell_type_fine = "fine_cell_type_ids",
+  hpca_cell_type_coarse = "hpca_cell_types",
+  hpca_cell_type_fine = "hpca_fine_cell_types")
+
+so@meta.data <- so@meta.data[, cols_to_keep]
+colnames(so@meta.data) <- names(cols_to_keep)
+Idents(so) <- "clusters"
 
 ```
 
 
-
-```{r,eval = FALSE}
-outdir <- "cellbrowser"
-dir.create(outdir, showWarnings = FALSE)
-# write out rds files with names listed in sobjs
-saveRDS(sobj,file.path(outdir, "cb.rds"))
-```
 
 ### Set colors
 
 ```{r}
-## default palette (see ../../R/globals.R)
 col_palette <- discrete_palette_default
+short_col_palette <- palette_OkabeIto
 
 ## summarize per cluster annotations
 to_map <- c("clusters",
-            "subtype",
+            "cell_type_fine",
+            "hpca_cell_type_coarse",
+            "hpca_cell_type_fine",
             "UPN",
-            "cell_type",
-            "cell_phenotype")
-col_map <- as.list(sobj@meta.data[, to_map]) %>%
+            "subgroup")
+col_map <- as.list(so@meta.data[, to_map]) %>%
       map(~as.character(unique(.x)))
 
 res <- list()
@@ -519,28 +518,34 @@ res <- list()
 tmp <- col_palette[1:length(col_map$clusters)]
 names(tmp) <- col_map$clusters
 res$clusters <- tmp 
+  
 
 tmp <- col_palette[1:length(col_map$UPN)]
 names(tmp) <- col_map$UPN
 res$UPN <- tmp 
-  
-tmp <- col_palette[1:length(col_map$subtype)]
-names(tmp) <- col_map$subtype
-res$subtype <- tmp 
 
-tmp <- col_palette[1:length(col_map$cell_type)]
-names(tmp) <- col_map$cell_type
-res$cell_type <- tmp 
+tmp <- col_palette[1:length(col_map$cell_type_fine)]
+names(tmp) <- col_map$cell_type_fine
+res$cell_type_fine <- tmp 
 
-tmp <- col_palette[1:length(col_map$cell_phenotype)]
-names(tmp) <- col_map$cell_phenotype
-res$cell_phenotype <- tmp 
+tmp <- short_col_palette[1:length(col_map$hpca_cell_type_coarse)]
+names(tmp) <- col_map$hpca_cell_type_coarse
+res$hpca_cell_type_coarse <- tmp 
+
+tmp <- col_palette[1:length(col_map$hpca_cell_type_fine)]
+names(tmp) <- col_map$hpca_cell_type_fine
+res$hpca_cell_type_fine <- tmp 
+
+tmp <- short_col_palette[1:length(col_map$subgroup)]
+names(tmp) <- col_map$subgroup
+res$subgroup <- tmp 
+
 
 map_dfr(res, 
         ~tibble(clusterName = names(.x), 
                 color = .x)) %>% 
   as.data.frame() %>% 
-  write_csv("cellbrowser/normal_colorMap.csv", col_names = F, quote_escape = "none")
+  write_csv("cellbrowser/immune_colorMap.csv", col_names = F, quote_escape = "none")
 
 ```
 
@@ -548,22 +553,22 @@ map_dfr(res,
 Build cellbrowser objects. Note requires UCSC (`cellbrowser python package`[ https://cellbrowser.readthedocs.io/index.html])
 
 ```{r}
-dir.create("cellbrowser/markers", recursive = TRUE)
-cols <- colnames(sobj@meta.data)
-names(cols) <- colnames(sobj@meta.data)
-mkrs <- read_tsv("markers/normal_immune_subset_cluster_markers_between_subgroups.tsv") %>% 
+cols <- colnames(so@meta.data)
+names(cols) <- colnames(so@meta.data)
+
+mkrs <- read_tsv("markers/immune_subset_cluster_markers.tsv") %>% 
   select(cluster, gene, p_val_adj, everything()) %>% 
   mutate(cluster = str_remove(cluster, "cluster_"))
 
-write_tsv(mkrs, "cellbrowser/markers/normal_cluster_markers.tsv")
+write_tsv(mkrs, "cellbrowser/markers/immune_cluster_markers.tsv")
 
-do.call(function(...) {ExportToCellbrowser(sobj, 
-                    dir = file.path("cellbrowser", "medulloblastoma_normal"),
-                    dataset.name = "medulloblastoma_normal",
+do.call(function(...) {ExportToCellbrowser(so, 
+                    dir = file.path("cellbrowser", "medulloblastoma_immune"),
+                    dataset.name = "medulloblastoma_immune",
                     reductions = c("umap"),
-                    markers.file = "cellbrowser/markers/normal_cluster_markers.tsv",
+                    markers.file = "cellbrowser/markers/immune_cluster_markers.tsv",
                     cluster.field = "clusters",
-                    skip.expr.matrix = TRUE,
+                    skip.expr.matrix = FALSE,
                     ...)}, 
         as.list(cols))
 
@@ -573,21 +578,256 @@ do.call(function(...) {ExportToCellbrowser(sobj,
 
 ```{bash}
 cd cellbrowser
-echo -e '\ncolors="/Users/kriemo/Projects/sc_repos/medulloblast/results/cellbrowser/normal_colorMap.csv"' >> medulloblastoma_normal/cellbrowser.conf
+echo -e '\ncolors="/Users/kriemo/Projects/sc_repos/medulloblast/results_v2/cellbrowser/immune_colorMap.csv"' >> medulloblastoma_immune/cellbrowser.conf
+```
+
+
+# Mouse model (SHH)
+
+```{r}
+so <- readRDS( file.path("objects",
+                  "mouse_models",
+                  "shh_model_sobj.rds"))
+```
+
+Simplify object metadata to make interpretable
+
+```{r}
+cols <- colnames(so@meta.data)
+cols_to_keep <- c(
+  `genes per cell` = "nFeature_RNA",
+  `UMIs per cell` = "nCount_RNA",
+  `percent of UMIs as mitochondria` = "percent.mt",
+  `clusters` = "clusters",
+  `sample` = "orig.ident",
+   cell_type = "cell_types",
+   `cell cycle phase` = "Phase")
+
+so@meta.data <- so@meta.data[, cols_to_keep]
+colnames(so@meta.data) <- names(cols_to_keep)
+Idents(so) <- "clusters"
+
+```
+
+
+## Set colors
+
+```{r}
+## default palette (see ../../R/globals.R)
+col_palette <- discrete_palette_default
+short_col_palette <- palette_OkabeIto
+
+## summarize per cluster annotations
+to_map <- c("clusters",
+            "sample",
+            "cell_type",
+            "cell cycle phase")
+col_map <- as.list(so@meta.data[, to_map]) %>%
+      map(~as.character(unique(.x)))
+
+res <- list()
+
+tmp <- col_palette[1:length(col_map$clusters)]
+names(tmp) <- col_map$clusters
+res$clusters <- tmp 
+  
+tmp <- short_col_palette[1:length(col_map$sample)]
+names(tmp) <- col_map$sample
+res$sample <- tmp 
+
+tmp <- short_col_palette[1:length(col_map$cell_type)]
+names(tmp) <- col_map$cell_type
+res$cell_type <- tmp 
+
+tmp <- short_col_palette[1:length(col_map$`cell cycle phase`)]
+names(tmp) <- col_map$`cell cycle phase`
+res$`cell cycle phase` <- tmp 
+
+map_dfr(res, 
+        ~tibble(clusterName = names(.x), 
+                color = .x)) %>% 
+  as.data.frame() %>% 
+  write_csv("cellbrowser/malignant_mouse_shh_colorMap.csv", col_names = F, quote_escape = "none")
+
+```
+
+
+```{r}
+cols <- colnames(so@meta.data)
+names(cols) <- colnames(so@meta.data)
+
+mkrs <- read_tsv("markers/mouse_models/tsv/shh_cluster_markers.tsv") %>% 
+  select(cluster, gene, p_val_adj, everything())
+
+write_tsv(mkrs, "cellbrowser/markers/malignant_mouse_shh_cluster_markers.tsv")
+
+do.call(function(...) {ExportToCellbrowser(so, 
+                    dir = file.path("cellbrowser",
+                                    "medulloblastoma_mouse_shh"),
+                    dataset.name = "medulloblastoma_mouse_shh",
+                    reductions = c("umap"),
+                    markers.file = "cellbrowser/markers/malignant_mouse_shh_cluster_markers.tsv",
+                    cluster.field = "clusters",
+                    skip.expr.matrix = FALSE,
+                    ...)}, 
+        as.list(cols))
+
 ```
 
 
 
+```{bash}
+cd cellbrowser
+echo -e '\ncolors="/Users/kriemo/Projects/sc_repos/medulloblast/results_v2/cellbrowser/malignant_mouse_shh_colorMap.csv"' >> medulloblastoma_mouse_shh/cellbrowser.conf
+```
 
 
-# Build all 
+# Mouse model (Gp34)
+
+```{r}
+so <- readRDS(file.path("objects",
+                  "mouse_models",
+                  "mb_models_sobj.rds"))
+```
+
+Simplify object metadata to make interpretable
+
+```{r}
+cols <- colnames(so@meta.data)
+cols_to_keep <- c(
+  `genes per cell` = "nFeature_RNA",
+  `UMIs per cell` = "nCount_RNA",
+  `percent of UMIs as mitochondria` = "percent.mt",
+  `clusters` = "clusters",
+  `sample` = "expt_ids",
+   cell_type = "cell_types",
+   `cell cycle phase` = "Phase",
+   firefly_expression = "luc-firefly",
+   egfp_expression = "egfp"
+  )
+
+so@meta.data <- so@meta.data[, cols_to_keep]
+colnames(so@meta.data) <- names(cols_to_keep)
+Idents(so) <- "clusters"
+
+```
+
+
+## Set colors
+
+```{r}
+## default palette (see ../../R/globals.R)
+col_palette <- discrete_palette_default
+short_col_palette <- palette_OkabeIto
+
+## summarize per cluster annotations
+to_map <- c("clusters",
+            "sample",
+            "cell_type",
+            "cell cycle phase")
+col_map <- as.list(so@meta.data[, to_map]) %>%
+      map(~as.character(unique(.x)))
+
+res <- list()
+
+tmp <- col_palette[1:length(col_map$clusters)]
+names(tmp) <- col_map$clusters
+res$clusters <- tmp 
+  
+tmp <- short_col_palette[1:length(col_map$sample)]
+names(tmp) <- col_map$sample
+res$sample <- tmp 
+
+tmp <- short_col_palette[1:length(col_map$cell_type)]
+names(tmp) <- col_map$cell_type
+res$cell_type <- tmp 
+
+tmp <- short_col_palette[1:length(col_map$`cell cycle phase`)]
+names(tmp) <- col_map$`cell cycle phase`
+res$`cell cycle phase` <- tmp 
+
+map_dfr(res, 
+        ~tibble(clusterName = names(.x), 
+                color = .x)) %>% 
+  as.data.frame() %>% 
+  write_csv("cellbrowser/malignant_mouse_gp34_colorMap.csv", col_names = F, quote_escape = "none")
+
+```
+
+
+```{r}
+cols <- colnames(so@meta.data)
+names(cols) <- colnames(so@meta.data)
+
+mkrs <- read_tsv("markers/mouse_models/tsv/mb_models_cluster_markers.tsv") %>% 
+  select(cluster, gene, p_val_adj, everything())
+
+write_tsv(mkrs, "cellbrowser/markers/malignant_mouse_gp34_cluster_markers.tsv")
+
+do.call(function(...) {ExportToCellbrowser(so, 
+                    dir = file.path("cellbrowser",
+                                    "medulloblastoma_mouse_gp34"),
+                    dataset.name = "medulloblastoma_mouse_gp34",
+                    reductions = c("umap"),
+                    markers.file = "cellbrowser/markers/malignant_mouse_gp34_cluster_markers.tsv",
+                    cluster.field = "clusters",
+                    skip.expr.matrix = FALSE,
+                    ...)}, 
+        as.list(cols))
+
+```
+
+
 
 ```{bash}
 cd cellbrowser
-/miniconda3/bin/cbBuild \
--i medulloblastoma/cellbrowser.conf \
--i medulloblastoma_neoplastic/cellbrowser.conf \
--i medulloblastoma_neoplastic_shh/cellbrowser.conf \
--i medulloblastoma_neoplastic_gp34/cellbrowser.conf \
--o mblast 
+echo -e '\ncolors="/Users/kriemo/Projects/sc_repos/medulloblast/results_v2/cellbrowser/malignant_mouse_gp34_colorMap.csv"' >> medulloblastoma_mouse_gp34/cellbrowser.conf
+```
+
+```{r}
+
+so <- readRDS(file.path("objects",
+                  "mouse_models",
+                  "mb_models_sobj.rds"))
+
+cols_to_keep <- c(
+  `genes per cell` = "nFeature_RNA",
+  `UMIs per cell` = "nCount_RNA",
+  `percent of UMIs as mitochondria` = "percent.mt",
+  `clusters` = "clusters",
+  `sample` = "expt_ids",
+   cell_type = "cell_types",
+   `cell cycle phase` = "Phase",
+   firefly_expression = "luc-firefly",
+   egfp_expression = "egfp"
+  )
+
+make_cellbrowser(so, 
+                 column_list = cols_to_keep,
+                 secondary_cols = c(
+                    "sample",
+                    "cell_type",
+                    "cell cycle phase"), 
+                 project = "medulloblastoma_gp34_mouse_models",
+                 outdir = "cellbrowser_test",
+                 marker_file = "markers/mouse_models/tsv/mb_models_cluster_markers.tsv",
+                 ident = "clusters"
+                 )
+```
+# Build all 
+
+
+```{r}
+datasets <- c(
+"medulloblastoma/cellbrowser.conf",
+"medulloblastoma_neoplastic/cellbrowser.conf",
+"medulloblastoma_neoplastic_shh/cellbrowser.conf",
+"medulloblastoma_neoplastic_gp34/cellbrowser.conf",
+"medulloblastoma_mouse_gp34/cellbrowser.conf",
+"medulloblastoma_mouse_shh/cellbrowser.conf",
+"medulloblastoma_immune/cellbrowser.conf"
+)
+datasets <- file.path("cellbrowser", datasets)
+
+build_cellbrowser(datasets, outdir = "cellbrowser/mblast/")
 ```

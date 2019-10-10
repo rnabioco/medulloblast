@@ -576,3 +576,127 @@ run_fgsea <- function(ranked_gene_list,
 
 }
 
+is_discrete <- function(x) {
+  is.character(x) | is.logical(x) | is.factor(x)
+}
+
+### Cell browser
+make_cellbrowser <- function(so,
+                             column_list = NULL,
+                             primary_color_palette = discrete_palette_default,
+                             secondary_color_palette = palette_OkabeIto,
+                             secondary_cols = NULL,
+                             outdir = "cellbrowser",
+                             project = "seurat",
+                             marker_file = NULL,
+                             ident = "clusters"
+                             ) {
+
+  dir.create(file.path(outdir, "markers"),
+             recursive = TRUE, showWarnings = FALSE)
+
+  col_file <- file.path(outdir, paste0(project, "_colorMap.csv"))
+  cbmarker_file <- file.path(outdir, "markers", paste0(project, "_markers.tsv"))
+
+  cols <- colnames(so@meta.data)
+
+  if(!(all(column_list %in% cols))){
+    stop("columns in column_list not found in object",
+         call. = FALSE)
+  }
+
+
+  so@meta.data <- so@meta.data[, column_list]
+  colnames(so@meta.data) <- names(column_list)
+  Idents(so) <- ident
+
+  ## Set colors
+  col_palette <- primary_color_palette
+  short_col_palette <- secondary_color_palette
+
+  ## assign colors per cluster annotations for discrete types
+  if(is.null(secondary_cols)){
+    to_primary_cols <- names(column_list)
+  } else {
+    to_primary_cols <- setdiff(names(column_list), secondary_cols)
+  }
+
+  to_map <- to_primary_cols[map_lgl(to_primary_cols,
+                                   ~is_discrete(so@meta.data[[.x]]))]
+
+  col_map <- as.list(so@meta.data[, to_map, drop = FALSE]) %>%
+    map(~as.character(unique(.x)))
+
+  col_res <- map(col_map,
+       function(x) {
+         cols = col_palette[1:length(x)]
+         structure(cols, names = x)
+       })
+
+  if(!is.null(secondary_cols)){
+    to_map <- secondary_cols[map_lgl(secondary_cols,
+                                      ~is_discrete(so@meta.data[[.x]]))]
+
+    col_map <- as.list(so@meta.data[, to_map, drop = FALSE]) %>%
+      map(~as.character(unique(.x)))
+
+    col_res_secondary <- map(col_map,
+                   function(x) {
+                     cols = col_palette[1:length(x)]
+                     structure(cols, names = x)
+                   })
+    col_res <- c(col_res, col_res_secondary)
+  }
+
+  map_dfr(col_res,
+          ~tibble(clusterName = names(.x),
+                  color = .x)) %>%
+    as.data.frame() %>%
+    write_csv(col_file, col_names = F,  quote_escape = "none")
+
+  cols <- colnames(so@meta.data)
+  names(cols) <- colnames(so@meta.data)
+
+  if(!is.null(marker_file)){
+    mkrs <- read_tsv(marker_file) %>%
+      select(cluster, gene, p_val_adj, everything())
+
+    write_tsv(mkrs, cbmarker_file)
+  } else {
+    cbmarker_file <- NULL
+  }
+
+  do.call(function(...) {ExportToCellbrowser(so,
+                                             dir = file.path(outdir, project),
+                                             dataset.name = project,
+                                             reductions = names(so@reductions),
+                                             markers.file = cbmarker_file,
+                                             cluster.field = ident,
+                                             skip.expr.matrix = FALSE,
+                                             ...)},
+          as.list(cols))
+
+  # add color line to config
+
+  outline <- paste0("'\ncolors=", '"', normalizePath(col_file), '"\'')
+  write_lines(outline, col_file, append = TRUE)
+
+}
+
+
+build_cellbrowser <- function(dataset_paths,
+                              outdir = "cellbrowser_build",
+                              cbBuild_path = "/miniconda3/bin/cbBuild",
+                              port = NULL){
+
+  cb_args <- unlist(map(dataset_paths, ~c("-i", .x)))
+  out_args <- c("-o", outdir)
+  cb_args <- c(cb_args, out_args)
+
+  if(!is.null(port)){
+    cb_args <- c(cb_args, "-p", port)
+  }
+  
+  system2(cbBuild_path,
+          args = cb_args)
+}
