@@ -17,7 +17,9 @@ source("../R/utils.R")
 library(tidyverse)
 #dir.create("cellbrowser")
 
+
 cb_outdir <- "cellbrowser"
+
 def_embeddings <- function(so) {str_subset(names(so@reductions), "umap")}
 ```
 
