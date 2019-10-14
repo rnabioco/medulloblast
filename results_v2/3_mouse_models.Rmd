@@ -441,10 +441,12 @@ so <- readRDS(file.path("objects",
                   "mouse_models",
                   "shh_model_sobj.rds"))
 
-supp_tbl_2 <- "https://static-content.springer.com/esm/art%3A10.1038%2Fs41586-019-1434-6/MediaObjects/41586_2019_1434_MOESM3_ESM.xlsx"
+if(!file.exists("../docs/northcutt_sup_tbl_2.xlsx")){
+  supp_tbl_2 <- "https://static-content.springer.com/esm/art%3A10.1038%2Fs41586-019-1434-6/MediaObjects/41586_2019_1434_MOESM3_ESM.xlsx"
 
+  download.file(supp_tbl_2, "../docs/northcutt_sup_tbl_2.xlsx")
+}
 
-download.file(supp_tbl_2, "../docs/northcutt_sup_tbl_2.xlsx")
 sup_tbl <- read_excel("../docs/northcutt_sup_tbl_2.xlsx", 
            sheet = 2,
            skip = 3) 
@@ -485,7 +487,8 @@ shh_mps <- c(
   "SHH-B_metafactor1",
   "SHH-C_metafactor1"
 )
-names(shh_mps) <- paste0("Hovestadt_et_al_", "SHH-", c("A", "B", "C"))
+names(shh_mps) <- paste0("Hovestadt_et_al_", "SHH-",
+                         c("A", "B", "C"))
 
 plts <- imap(shh_mps,
             ~plot_feature(so, 
@@ -547,6 +550,69 @@ iwalk(plts,
 
 
 ```
+
+## Add our cluster modules
+
+Using top marker genes found in our SHH human clusters, assign scores to mouse model. 
+
+```{r}
+human_markers <- read_tsv(file.path("markers",
+                                   "harmony_markers_shh.tsv"))
+
+# top 50 marker genes for modules and get mouse ortholog
+human_modules <- filter(human_markers, p_val_adj < 0.05) %>% 
+  group_by(cluster) %>% 
+  arrange(p_val_adj, pct.1, .by_group = TRUE) %>% 
+  left_join(orthologs, by = c("gene" = "external_gene_name")) %>% 
+  na.omit() %>% 
+  group_by(cluster) %>% 
+  slice(1:50) %>% 
+  split(., .$cluster) %>% 
+  map(., ~pull(.x, mmusculus_homolog_associated_gene_name))
+
+names(human_modules) <- paste0("SHH_human_signatures_cluster_",
+                               unique(human_markers$cluster))
+
+so <- AddModuleScore(so, 
+                       features = human_modules,
+                       ctrl = 50,
+                       name = "tmp_",
+                       seed = 42)
+
+new_cols <- paste0("tmp_", 1:length(unique(human_markers$cluster)))
+new_col_idx <- map_int(new_cols, ~which(.x == colnames(so@meta.data)))
+better_cols <- names(human_modules)
+
+# fix column names
+colnames(so@meta.data)[new_col_idx] <- better_cols
+
+names(better_cols) <- better_cols
+
+plt <- imap(better_cols, 
+    ~plot_umap(so, .x, show_negative = TRUE, minimal_theme = TRUE) + 
+      labs(title = .y)) %>% 
+  plot_grid(plotlist = ., 
+            nrow = 3,
+            ncol = 3)
+
+plt 
+
+save_plot(file.path(fig_dir, "umap_shh_by_SHH_human_signatures.pdf"),
+          plt, 
+          base_asp = 1,
+          nrow = 3,
+          ncol = 3)
+
+```
+
+## resave object
+
+```{r}
+saveRDS(so, file.path("objects",
+                  "mouse_models",
+                  "shh_model_sobj.rds"))
+```
+
 # GP mouse model
 
 >
@@ -1088,10 +1154,12 @@ so <- readRDS(file.path("objects",
                   "mouse_models",
                   "mb_models_sobj.rds"))
 
-supp_tbl_2 <- "https://static-content.springer.com/esm/art%3A10.1038%2Fs41586-019-1434-6/MediaObjects/41586_2019_1434_MOESM3_ESM.xlsx"
+if(!file.exists("../docs/northcutt_sup_tbl_2.xlsx")){
+  supp_tbl_2 <- "https://static-content.springer.com/esm/art%3A10.1038%2Fs41586-019-1434-6/MediaObjects/41586_2019_1434_MOESM3_ESM.xlsx"
 
+  download.file(supp_tbl_2, "../docs/northcutt_sup_tbl_2.xlsx")
+}
 
-download.file(supp_tbl_2, "../docs/northcutt_sup_tbl_2.xlsx")
 sup_tbl <- read_excel("../docs/northcutt_sup_tbl_2.xlsx", 
            sheet = 2,
            skip = 3) 
@@ -1150,7 +1218,71 @@ iwalk(plts,
 
 ```
 
-## Combine datasets 
+## Add our cluster modules
+
+Using top marker genes found in our SHH human clusters, assign scores to mouse model. 
+
+```{r}
+human_markers <- read_tsv(file.path("markers",
+                                   "harmony_markers_gp34.tsv"))
+
+# top 50 marker genes for modules and get mouse ortholog
+human_modules <- filter(human_markers, p_val_adj < 0.05) %>% 
+  group_by(cluster) %>% 
+  arrange(p_val_adj, pct.1, .by_group = TRUE) %>% 
+  left_join(orthologs, by = c("gene" = "external_gene_name")) %>% 
+  na.omit() %>% 
+  group_by(cluster) %>% 
+  slice(1:50) %>% 
+  split(., .$cluster) %>% 
+  map(., ~pull(.x, mmusculus_homolog_associated_gene_name))
+
+names(human_modules) <- paste0("gp34_human_signatures_cluster_",
+                               unique(human_markers$cluster))
+
+so <- AddModuleScore(so, 
+                       features = human_modules,
+                       ctrl = 50,
+                       name = "tmp_",
+                       seed = 42)
+
+new_cols <- paste0("tmp_", 1:length(unique(human_markers$cluster)))
+new_col_idx <- map_int(new_cols,
+                       ~which(.x == colnames(so@meta.data)))
+better_cols <- names(human_modules)
+
+# fix column names
+colnames(so@meta.data)[new_col_idx] <- better_cols
+
+names(better_cols) <- better_cols
+
+plt <- imap(better_cols, 
+    ~plot_umap(so, .x, show_negative = TRUE, minimal_theme = TRUE) + 
+      labs(title = .y)) %>% 
+  plot_grid(plotlist = ., 
+            nrow = 3,
+            ncol = 3)
+
+
+save_plot(file.path(fig_dir,
+                    "umap_gp34_by_gp34_human_signatures.pdf"),
+          plt, 
+          base_asp = 1,
+          nrow = 3,
+          ncol = 3)
+plt
+```
+
+
+## resave object
+
+```{r}
+saveRDS(so, file.path("objects",
+                  "mouse_models",
+                  "mb_models_sobj.rds"))
+```
+
+# Combine datasets 
 
 
 ```{r}
