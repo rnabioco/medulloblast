@@ -589,7 +589,10 @@ make_cellbrowser <- function(so,
                              outdir = "cellbrowser",
                              project = "seurat",
                              marker_file = NULL,
-                             ident = "clusters"
+                             ident = "clusters",
+                             embeddings = names(so@reductions),
+                             color_skip = NULL,
+                             skip_expr_matrix = FALSE
                              ) {
 
   dir.create(file.path(outdir, "markers"),
@@ -597,8 +600,15 @@ make_cellbrowser <- function(so,
 
   col_file <- file.path(outdir, paste0(project, "_colorMap.csv"))
   cbmarker_file <- file.path(outdir, "markers", paste0(project, "_markers.tsv"))
+  cb_config_file <- file.path(outdir, project, "cellbrowser.conf")
 
   cols <- colnames(so@meta.data)
+
+  if(!is.null(embeddings)){
+    embeddings <- intersect(names(so@reductions), embeddings)
+  } else {
+    embeddings <- names(so@reductions)
+  }
 
   if(!(all(column_list %in% cols))){
     stop("columns in column_list not found in object",
@@ -624,6 +634,10 @@ make_cellbrowser <- function(so,
   to_map <- to_primary_cols[map_lgl(to_primary_cols,
                                    ~is_discrete(so@meta.data[[.x]]))]
 
+  if(!is.null(color_skip)){
+    to_map <- setdiff(to_map, color_skip)
+  }
+
   col_map <- as.list(so@meta.data[, to_map, drop = FALSE]) %>%
     map(~as.character(unique(.x)))
 
@@ -642,7 +656,7 @@ make_cellbrowser <- function(so,
 
     col_res_secondary <- map(col_map,
                    function(x) {
-                     cols = col_palette[1:length(x)]
+                     cols = short_col_palette[1:length(x)]
                      structure(cols, names = x)
                    })
     col_res <- c(col_res, col_res_secondary)
@@ -669,34 +683,34 @@ make_cellbrowser <- function(so,
   do.call(function(...) {ExportToCellbrowser(so,
                                              dir = file.path(outdir, project),
                                              dataset.name = project,
-                                             reductions = names(so@reductions),
+                                             reductions = embeddings,
                                              markers.file = cbmarker_file,
                                              cluster.field = ident,
-                                             skip.expr.matrix = FALSE,
+                                             skip.expr.matrix = skip_expr_matrix,
                                              ...)},
           as.list(cols))
 
   # add color line to config
 
-  outline <- paste0("'\ncolors=", '"', normalizePath(col_file), '"\'')
-  write_lines(outline, col_file, append = TRUE)
+  outline <- paste0("\ncolors=", '"', normalizePath(col_file), '"')
+  write_lines(outline, cb_config_file, append = TRUE)
 
 }
 
 
 build_cellbrowser <- function(dataset_paths,
                               outdir = "cellbrowser_build",
-                              cbBuild_path = "/miniconda3/bin/cbBuild",
-                              port = NULL){
+                              cbBuild_path = "/miniconda3/envs/py37/bin/cbBuild",
+                              command = TRUE){
 
   cb_args <- unlist(map(dataset_paths, ~c("-i", .x)))
   out_args <- c("-o", outdir)
   cb_args <- c(cb_args, out_args)
 
-  if(!is.null(port)){
-    cb_args <- c(cb_args, "-p", port)
-  }
-  
   system2(cbBuild_path,
           args = cb_args)
+
+  if(command){
+    message(paste(c(cbBuild_path, cb_args), collapse = " "))
+  }
 }
