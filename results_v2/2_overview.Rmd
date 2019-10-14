@@ -24,7 +24,9 @@ library(ComplexHeatmap)
 library(dendextend)
 ```
 
-## Read object
+# All data overview  
+
+  
 ```{r}
 so <- readRDS(file.path("objects", "so.rds"))
 ```
@@ -164,7 +166,7 @@ save_plot(file.path(fig_dir, "umap_neoplastic_by_UPN.pdf"),
           base_asp = 1.4)
 ```
 
-## SHH tumors
+# SHH tumors
 
 ### Various genes in SHH
 
@@ -332,7 +334,64 @@ iwalk(plts,
 
 
 
-## GP3 and GP 4 tumors
+
+### cell count tables 
+
+```{r}
+res <- so@meta.data %>% 
+  group_by(coarse_clusters_shh_harmony, UPN) %>% 
+  summarize(n = n()) %>% 
+  ungroup() %>% 
+  spread(UPN, n, fill = 0L) 
+
+write_csv(res, file.path(tbls_dir,
+                  "shh_cells_per_cluster_per_sample.csv"))
+
+res <- so@meta.data %>% 
+    group_by(coarse_clusters_shh_harmony, UPN) %>% 
+    summarize(n = n()) %>%
+  group_by(coarse_clusters_shh_harmony) %>% 
+  mutate(total = sum(n),
+         percent = 100 * n / total) %>% 
+  ungroup() %>% 
+  select(-n, -total) %>% 
+  spread(UPN, percent, fill = 0L) 
+
+  
+write_csv(res, file.path(tbls_dir,
+                  "shh_percent_cells_per_cluster_per_sample.csv"))
+
+```
+
+
+```{r}
+res <- sobj@meta.data %>% 
+  group_by(clusters_aligned, UPN) %>% 
+  summarize(n = n()) %>% 
+  ungroup() %>% 
+  spread(UPN, n, fill = 0L) 
+
+res
+  write_csv(res, file.path(tbl_dir,
+                  "cells_per_cluster_per_sample.csv"))
+
+res <- sobj@meta.data %>% 
+    group_by(clusters_aligned, UPN) %>% 
+    summarize(n = n()) %>%
+  group_by(clusters_aligned) %>% 
+  mutate(total = sum(n),
+         percent = 100 * n / total) %>% 
+  ungroup() %>% 
+  select(-n, -total) %>% 
+  spread(UPN, percent, fill = 0L) 
+
+  
+res
+  write_csv(res, file.path(tbl_dir,
+                  "percent_cells_per_cluster_per_sample.csv"))
+
+```
+# GP3 and GP 4 tumors
 
 ### Various marker genes for Gp3 and Gp4
 
@@ -525,7 +584,60 @@ save_plot(file.path(fig_dir,
           ncol = 3)
 ```
 
-## Examine factorization approaches
+
+
+### cell count tables 
+
+
+```{r}
+res <- so@meta.data %>% 
+  group_by(coarse_clusters_gp34_harmony, UPN) %>% 
+  summarize(n = n()) %>% 
+  ungroup() %>% 
+  spread(UPN, n, fill = 0L) 
+
+write_csv(res, file.path(tbls_dir,
+                  "gp34_cells_per_cluster_per_sample.csv"))
+
+res <- so@meta.data %>% 
+    group_by(coarse_clusters_gp34_harmony, UPN) %>% 
+    summarize(n = n()) %>%
+  group_by(coarse_clusters_gp34_harmony) %>% 
+  mutate(total = sum(n),
+         percent = 100 * n / total) %>% 
+  ungroup() %>% 
+  select(-n, -total) %>% 
+  spread(UPN, percent, fill = 0L) 
+
+  
+write_csv(res, file.path(tbls_dir,
+                  "gp34_percent_cells_per_cluster_per_sample.csv"))
+
+res <- so@meta.data %>%
+    group_by(coarse_clusters_gp34_harmony, subtype) %>%
+  summarize(n = n()) %>%
+  ungroup() %>%
+  spread(subtype, n, fill = 0L)
+
+
+res
+  write_csv(res, file.path(tbls_dir,
+                  "gp34_subtypes_per_cluster.csv"))
+
+res <- so@meta.data %>%
+    group_by(coarse_clusters_gp34_harmony, subgroup) %>%
+  summarize(n = n()) %>%
+  ungroup() %>%
+  spread(subgroup, n, fill = 0L)
+
+
+res
+  write_csv(res, file.path(tbls_dir,
+                  "gp34_subgroups_per_cluster.csv"))
+  
+```
+
+# Examine factorization approaches
 
 ## scHPF
 ```{r, eval = FALSE}
