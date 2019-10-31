@@ -274,7 +274,7 @@ so <- subset(so, subset = UPN != "1008")
 ```
 
 
-Annotate samples and assign colors to each sample. Also merge replicates from 966
+Annotate samples and assign colors to each sample. 
 
 
 ```{r}
@@ -479,6 +479,37 @@ plts
 
 ```
 
+## Fix 966 annotation
+
+the two samples from 966 are not replicates, the first is a sample from presentation. The second is from a recurrance sample. 
+
+```{r}
+so$UPN <- so$orig.ident
+
+annots <- so@meta.data %>%
+  select(UPN, subgroup) %>%
+  unique() %>%
+  arrange(subgroup)
+
+subgroup_order <- c(
+  "SHH",
+  "GP3",
+  "GP3/4",
+  "GP4"
+)
+
+annots <- mutate(annots,
+                 subgroup = factor(subgroup, levels = subgroup_order))
+
+annots <- annots %>% arrange(subgroup, as.numeric(UPN))
+
+sample_order <- annots$UPN
+
+so@meta.data$UPN <- factor(so@meta.data$UPN, levels = sample_order)
+
+```
+
+
 
 ## Write out data
 
@@ -490,10 +521,4 @@ outname <- file.path("tables",
                      paste0("metadata_", format(Sys.Date(), "%Y_%m_%d"), ".tsv.gz"))
 write_tsv(mdata_out, outname)
 ```
-
-
-
-
-
-
 

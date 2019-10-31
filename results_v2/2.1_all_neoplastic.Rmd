@@ -148,7 +148,6 @@ plot_grid(a, b, d, nrow = 1)
 
 
 ```{r}
-
 saveRDS(so, "objects/all_neoplastic.rds")
 ```
 

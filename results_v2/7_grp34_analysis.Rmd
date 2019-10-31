@@ -277,7 +277,7 @@ saveRDS(so, "objects/gp34.rds")
 ```
 
 ```{r}
-so <-readRDS("objects/gp34.rds")
+so <- readRDS("objects/gp34.rds")
 
 #full count matrix
 GetAssayData(so, "counts") %>% 

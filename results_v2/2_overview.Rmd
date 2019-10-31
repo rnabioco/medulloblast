@@ -637,6 +637,245 @@ res
   
 ```
 
+
+# Immune subsets
+
+```{r}
+immune_fig_dir <- file.path(fig_dir, "immune")
+```
+
+### Various
+
+```{r}
+so <- readRDS(file.path("objects", "immune_so.rds"))
+
+p <- plot_feature(so, 
+             "fine_immune_clusters", 
+             embedding = "umap", 
+             label_color = "black", 
+             label_text = TRUE) +
+  labs(x = "UMAP 1",
+       y = "UMAP 2")
+
+save_plot(file.path(immune_fig_dir, "umap_by_clusters.pdf"),
+          p, 
+          base_asp = 1.2)
+
+p <- plot_umap(so, 
+             "UPN")
+
+save_plot(file.path(immune_fig_dir, "umap_by_upn.pdf"),
+          p, 
+          base_asp = 1.4)
+
+
+p <- plot_umap(so, "hpca_cell_types", label_text = TRUE, label_size = 3.) +
+  theme(legend.position = "none")
+
+save_plot(file.path(immune_fig_dir, "umap_by_cell_type.pdf"),
+          p, 
+          base_asp = 1.2)
+
+p <- plot_features_split(so, "hpca_cell_types", "subgroup")
+
+p
+save_plot(file.path(immune_fig_dir,
+                    "umap_by_fine_cell_types_split_by_subgroup.pdf"),
+          p, base_asp = 1.2,
+          nrow = 2, 
+          ncol = 2)
+
+
+plt_dat <- so@meta.data %>% 
+  group_by(subgroup) %>% 
+  mutate(total_cells = n()) %>% 
+  group_by(subgroup, fine_cell_type_ids) %>% 
+  summarize(percent_of_cells = 100 * n() / unique(total_cells)) %>% 
+  spread(subgroup, percent_of_cells, fill = 0L)
+
+p <- plt_dat %>% 
+  gather(subgroup, percent, -fine_cell_type_ids) %>% 
+  ggplot(aes(fine_cell_type_ids, percent)) +
+  geom_col(aes(fill = subgroup), position = position_dodge2()) +
+  scale_fill_manual(name = "", 
+                    values = palette_OkabeIto) +
+  labs(x = "",
+       y = "Percent of Cells") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+p
+
+save_plot(file.path(fig_dir, 
+                    "barplot_cell_percentages.pdf"),
+          p,
+          base_asp = 0.75,
+          base_height = 6)
+```
+
+### cluster markers
+
+```{r fig.height = 6}
+mkrs <- read_tsv(file.path(mkrs_dir, "harmony_markers_gp34.tsv"))
+
+topx <- mkrs %>% 
+  arrange(p_val_adj) %>% 
+  group_by(cluster) %>% 
+  slice(1:10) 
+
+p <- DotPlot(so, 
+        features = unique(topx$gene),
+        cols = "Spectral",
+        group.by = "coarse_clusters_gp34_harmony") +
+  coord_flip() +
+  labs(y = "Cluster",
+       x = "") +
+  theme(axis.text.x = element_text(size = 24),
+        axis.text.y = element_text(size = 12),
+        axis.title.x = element_text(size = 24))
+
+p
+
+save_plot(file.path(fig_dir, 
+                    "dotplot_gp34_markers.pdf"), 
+          p, base_height = 12, base_asp = 0.75)
+
+
+```
+
+### Northcutt metaprograms
+
+
+```{r}
+shh_mps <- c(
+  "Group 3/4-A_metafactor1",
+  "Group 3/4-B_metafactor1",
+  "Group 3/4-C_metafactor1"
+)
+names(shh_mps) <- paste0("Hovestadt_et_al_", "Group 3 and 4-", c("A", "B", "C"))
+
+plts <- imap(shh_mps,
+            ~plot_feature(so, 
+               .x, 
+               embedding = "umap_harmony", 
+               show_negative = TRUE,
+               minimal_theme = TRUE) + 
+              labs(title = .y))
+
+iwalk(plts, 
+    ~save_plot(file.path(fig_dir, 
+                         paste0("umap_gp34_by_", .y, ".pdf")),
+          .x, 
+          base_asp = 1.4))
+
+```
+
+### plot various gnes
+
+Most of the tSNE plots show really sparse and low expression of these genes. Not sure how reliable those finding are. 
+
+```{r}
+
+famous_genes <- c(
+  "EOMES",
+  "MYC",
+  "NRL",
+  "TOP2A",
+  "CRX",
+  "ROM1"
+)
+
+plts <- map(famous_genes,
+            ~plot_feature(so, 
+               .x, 
+               embedding = "umap_harmony", 
+               minimal_theme = TRUE) )
+names(plts) <- famous_genes
+iwalk(plts, 
+    ~save_plot(file.path(fig_dir, 
+                         paste0("umap_gp34_by_", .y, ".pdf")),
+          .x, 
+          base_asp = 1.4))
+```
+
+
+```{r}
+
+p <- plot_features_split(so, 
+                    "coarse_clusters_gp34_harmony",
+                    "subgroup",
+                    embedding = "umap_harmony",
+                    label_text = TRUE,
+                    label_size = 4,
+                    minimal_theme = TRUE) +
+  labs(x = "UMAP_1",
+       y = "UMAP_2",
+       title = "") +
+  theme(legend.position = "none")
+
+p
+
+save_plot(file.path(fig_dir, 
+                         paste0("umap_gp34_by_cluster_split.pdf")),
+          p, 
+          base_asp = 1,
+          nrow = 1, 
+          ncol = 3)
+```
+
+
+
+### cell count tables 
+
+
+```{r}
+res <- so@meta.data %>% 
+  group_by(coarse_clusters_gp34_harmony, UPN) %>% 
+  summarize(n = n()) %>% 
+  ungroup() %>% 
+  spread(UPN, n, fill = 0L) 
+
+write_csv(res, file.path(tbls_dir,
+                  "gp34_cells_per_cluster_per_sample.csv"))
+
+res <- so@meta.data %>% 
+    group_by(coarse_clusters_gp34_harmony, UPN) %>% 
+    summarize(n = n()) %>%
+  group_by(coarse_clusters_gp34_harmony) %>% 
+  mutate(total = sum(n),
+         percent = 100 * n / total) %>% 
+  ungroup() %>% 
+  select(-n, -total) %>% 
+  spread(UPN, percent, fill = 0L) 
+
+  
+write_csv(res, file.path(tbls_dir,
+                  "gp34_percent_cells_per_cluster_per_sample.csv"))
+
+res <- so@meta.data %>%
+    group_by(coarse_clusters_gp34_harmony, subtype) %>%
+  summarize(n = n()) %>%
+  ungroup() %>%
+  spread(subtype, n, fill = 0L)
+
+
+res
+  write_csv(res, file.path(tbls_dir,
+                  "gp34_subtypes_per_cluster.csv"))
+
+res <- so@meta.data %>%
+    group_by(coarse_clusters_gp34_harmony, subgroup) %>%
+  summarize(n = n()) %>%
+  ungroup() %>%
+  spread(subgroup, n, fill = 0L)
+
+
+res
+  write_csv(res, file.path(tbls_dir,
+                  "gp34_subgroups_per_cluster.csv"))
+  
+```
+
+
 # Examine factorization approaches
 
 ## scHPF
