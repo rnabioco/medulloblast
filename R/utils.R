@@ -592,7 +592,8 @@ make_cellbrowser <- function(so,
                              ident = "clusters",
                              embeddings = names(so@reductions),
                              color_skip = NULL,
-                             skip_expr_matrix = FALSE
+                             skip_expr_matrix = FALSE,
+                             skip_markers = FALSE
                              ) {
 
   dir.create(file.path(outdir, "markers"),
@@ -614,7 +615,6 @@ make_cellbrowser <- function(so,
     stop("columns in column_list not found in object",
          call. = FALSE)
   }
-
 
   so@meta.data <- so@meta.data[, column_list]
   colnames(so@meta.data) <- names(column_list)
@@ -671,13 +671,25 @@ make_cellbrowser <- function(so,
   cols <- colnames(so@meta.data)
   names(cols) <- colnames(so@meta.data)
 
+  # resave marker file in custom format
+  # not that the third column will sorted in rev order
+  # only if it has these strings
+  #["p_val", "p-val", "p.val", "pval", "fdr"]
+  # otherwise ascending order
+  # see https://github.com/maximilianh/cellBrowser/blob/c643946d160c9729833a47d1bc44cd49fface6f6/src/cbPyLib/cellbrowser/cellbrowser.py#L2260
   if(!is.null(marker_file)){
     mkrs <- read_tsv(marker_file) %>%
-      select(cluster, gene, p_val_adj, everything())
-
+      select(cluster, gene, fdr = p_val_adj, avg_logFC, everything(), -p_val)
+    print(cbmarker_file)
     write_tsv(mkrs, cbmarker_file)
   } else {
     cbmarker_file <- NULL
+  }
+
+  # by default ExportToCellBrowser will not overwrite the markers.tsv.gz file
+  # if it exists. This can cause some unexpected issues
+  if(!skip_markers){
+    unlink(file.path(outdir, project, "markers.tsv"))
   }
 
   do.call(function(...) {ExportToCellbrowser(so,
