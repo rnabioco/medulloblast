@@ -209,7 +209,7 @@ so <- readRDS( file.path("objects",
                   "mouse_models",
                   "shh_model_sobj.rds"))
 
-signatures <- paste0("SHH_human_signatures_cluster_", 0:7)
+signatures <- paste0("SHH_human_signatures_clust_", 0:7)
 names(signatures) <- signatures
 
 cols_to_keep <- c(
@@ -247,7 +247,7 @@ so <- readRDS(file.path("objects",
                   "mouse_models",
                   "mb_models_sobj.rds"))
 
-signatures <- paste0("gp34_human_signatures_cluster_",
+signatures <- paste0("gp34_human_signatures_clust_",
                      0:7)
 names(signatures) <- signatures
 

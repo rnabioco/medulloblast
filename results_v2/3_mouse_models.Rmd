@@ -570,7 +570,10 @@ human_modules <- filter(human_markers, p_val_adj < 0.05) %>%
   split(., .$cluster) %>% 
   map(., ~pull(.x, mmusculus_homolog_associated_gene_name))
 
-names(human_modules) <- paste0("SHH_human_signatures_cluster_",
+# dont't name anything with "luster" or "ouvain", as will not
+# be recognized as float by ucsc cellbrowser...
+
+names(human_modules) <- paste0("SHH_human_signatures_clust_",
                                unique(human_markers$cluster))
 
 so <- AddModuleScore(so, 
@@ -1237,7 +1240,7 @@ human_modules <- filter(human_markers, p_val_adj < 0.05) %>%
   split(., .$cluster) %>% 
   map(., ~pull(.x, mmusculus_homolog_associated_gene_name))
 
-names(human_modules) <- paste0("gp34_human_signatures_cluster_",
+names(human_modules) <- paste0("gp34_human_signatures_clust_",
                                unique(human_markers$cluster))
 
 so <- AddModuleScore(so, 

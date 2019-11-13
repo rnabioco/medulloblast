@@ -593,7 +593,8 @@ make_cellbrowser <- function(so,
                              embeddings = names(so@reductions),
                              color_skip = NULL,
                              skip_expr_matrix = FALSE,
-                             skip_markers = FALSE
+                             skip_markers = FALSE,
+                             overwrite_cb_config = TRUE
                              ) {
 
   dir.create(file.path(outdir, "markers"),
@@ -602,6 +603,10 @@ make_cellbrowser <- function(so,
   col_file <- file.path(outdir, paste0(project, "_colorMap.csv"))
   cbmarker_file <- file.path(outdir, "markers", paste0(project, "_markers.tsv"))
   cb_config_file <- file.path(outdir, project, "cellbrowser.conf")
+
+  if(overwrite_cb_config){
+    unlink(cb_config_file)
+  }
 
   cols <- colnames(so@meta.data)
 
