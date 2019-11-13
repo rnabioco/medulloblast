@@ -655,11 +655,12 @@ p <- plot_feature(so,
              label_color = "black", 
              label_text = TRUE) +
   labs(x = "UMAP 1",
-       y = "UMAP 2")
+       y = "UMAP 2") +
+  theme(legend.position = "none")
 
 save_plot(file.path(immune_fig_dir, "umap_by_clusters.pdf"),
           p, 
-          base_asp = 1.2)
+          base_asp = 1.0)
 
 p <- plot_umap(so, 
              "UPN")
@@ -668,20 +669,26 @@ save_plot(file.path(immune_fig_dir, "umap_by_upn.pdf"),
           p, 
           base_asp = 1.4)
 
+p <- plot_umap(so, 
+             "subgroup", .cols = palette_OkabeIto)
 
-p <- plot_umap(so, "hpca_cell_types", label_text = TRUE, label_size = 3.) +
-  theme(legend.position = "none")
+save_plot(file.path(immune_fig_dir, "umap_by_subgroup.pdf"),
+          p, 
+          base_asp = 1.4)
+
+
+p <- plot_umap(so, "new_cell_type_ids")
 
 save_plot(file.path(immune_fig_dir, "umap_by_cell_type.pdf"),
           p, 
-          base_asp = 1.2)
+          base_asp = 2.0)
 
-p <- plot_features_split(so, "hpca_cell_types", "subgroup")
+p <- plot_features_split(so, "new_cell_type_ids", "subgroup")
 
 p
 save_plot(file.path(immune_fig_dir,
                     "umap_by_fine_cell_types_split_by_subgroup.pdf"),
-          p, base_asp = 1.2,
+          p, base_asp = 1.4,
           nrow = 2, 
           ncol = 2)
 
@@ -689,13 +696,14 @@ save_plot(file.path(immune_fig_dir,
 plt_dat <- so@meta.data %>% 
   group_by(subgroup) %>% 
   mutate(total_cells = n()) %>% 
-  group_by(subgroup, fine_cell_type_ids) %>% 
+  group_by(subgroup, new_cell_type_ids) %>% 
   summarize(percent_of_cells = 100 * n() / unique(total_cells)) %>% 
   spread(subgroup, percent_of_cells, fill = 0L)
 
 p <- plt_dat %>% 
-  gather(subgroup, percent, -fine_cell_type_ids) %>% 
-  ggplot(aes(fine_cell_type_ids, percent)) +
+  gather(subgroup, percent, -new_cell_type_ids) %>% 
+  mutate(subgroup = factor(subgroup, levels = levels(so$subgroup))) %>%
+  ggplot(aes(new_cell_type_ids, percent)) +
   geom_col(aes(fill = subgroup), position = position_dodge2()) +
   scale_fill_manual(name = "", 
                     values = palette_OkabeIto) +
@@ -705,7 +713,7 @@ p <- plt_dat %>%
 
 p
 
-save_plot(file.path(fig_dir, 
+save_plot(file.path(immune_fig_dir, 
                     "barplot_cell_percentages.pdf"),
           p,
           base_asp = 0.75,
@@ -715,7 +723,7 @@ save_plot(file.path(fig_dir,
 ### cluster markers
 
 ```{r fig.height = 6}
-mkrs <- read_tsv(file.path(mkrs_dir, "harmony_markers_gp34.tsv"))
+mkrs <- read_tsv(file.path(mkrs_dir,"immune_subset_cell_type_markers.tsv"))
 
 topx <- mkrs %>% 
   arrange(p_val_adj) %>% 
@@ -725,23 +733,67 @@ topx <- mkrs %>%
 p <- DotPlot(so, 
         features = unique(topx$gene),
         cols = "Spectral",
-        group.by = "coarse_clusters_gp34_harmony") +
+        group.by = "new_cell_type_ids") +
   coord_flip() +
-  labs(y = "Cluster",
+  labs(y = "",
        x = "") +
-  theme(axis.text.x = element_text(size = 24),
-        axis.text.y = element_text(size = 12),
-        axis.title.x = element_text(size = 24))
+  theme(axis.text.x = element_text(size = 24, angle = 90, hjust = 0.5),
+        axis.text.y = element_text(size = 10),
+        axis.title = element_blank())
 
 p
 
-save_plot(file.path(fig_dir, 
-                    "dotplot_gp34_markers.pdf"), 
-          p, base_height = 12, base_asp = 0.75)
+save_plot(file.path(immune_fig_dir, 
+                    "dotplot_immune_markers.pdf"), 
+          p, base_height = 24, base_asp = 0.5)
 
 
 ```
 
+heatmap
+
+```{r}
+to_plot <- c(
+  "Dendritic-cell-like (CD1C+,FCER1A+)",
+  "Activated-Microglia 3 (CCL3+, SPP1+)",
+  "Activated-Microglia 2 (APOE+, TYROBP+)",
+  "Activated-Microglia 1 (APOE+, GPNMB+)",
+  "Neutrophil (S100A9+, THBS1+)",
+  "Microglia (P2RY12+ TMEM119+)"
+)
+
+topx <- read_tsv(file.path(mkrs_dir,"immune_subset_cell_type_markers.tsv")) %>% 
+  filter(p_val_adj < 0.05,
+         cluster %in% to_plot) %>% 
+  group_by(cluster) %>% 
+  arrange(p_val_adj, .by_group = TRUE) %>% 
+  slice(1:10)
+
+so <- ScaleData(so, features = rownames(so))
+
+tmp_so <- subset(so, 
+                 subset = new_cell_type_ids %in% to_plot)
+
+tmp_so$new_cell_type_ids <- factor(tmp_so$new_cell_type_ids)
+
+p <- DoHeatmap(tmp_so, 
+               group.colors = discrete_palette_default,
+               features = unique(topx$gene),
+               group.by = "new_cell_type_ids",
+               angle = 45, 
+               size = 4,
+               raster = FALSE, 
+               draw.lines = TRUE)
+
+p <- p +
+  scale_fill_gradientn(colours = viridis::viridis(256),
+                       name = "Expression\nZ-scores")
+
+save_plot(file.path(immune_fig_dir, "heatmap_markers_microglia.pdf"), 
+          p,
+          base_width = 10,
+          base_height = 12)
+```
 ### Northcutt metaprograms
 
 
@@ -874,6 +926,12 @@ res
                   "gp34_subgroups_per_cluster.csv"))
   
 ```
+
+
+
+
+
+
 
 
 # Examine factorization approaches

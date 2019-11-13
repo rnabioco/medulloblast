@@ -171,15 +171,19 @@ make_cellbrowser(so,
 ```{r}
 so <- readRDS(file.path("objects", "immune_so.rds"))
 
+# dont use commas in cluster ids
+so$new_cell_type_ids <- str_remove(so$new_cell_type_ids, ",")
+
 cols_to_keep <- c(
   `genes per cell` = "nFeature_RNA",
   `UMIs per cell` = "nCount_RNA",
   `percent of UMIs as mitochondria` = "percent.mt",
   `clusters` = "fine_immune_clusters",
   `subgroup` = "subgroup",
-  `Dx` = "Dx",
+  #`Dx` = "Dx",
   `UPN` = "UPN",
   cell_type_fine = "fine_cell_type_ids",
+  new_cell_type_fine = "new_cell_type_ids",
   hpca_cell_type_coarse = "hpca_cell_types",
   hpca_cell_type_fine = "hpca_fine_cell_types")
 

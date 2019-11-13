@@ -172,8 +172,8 @@ write_tsv(mkrs,
 write_markers_xlsx(split(mkrs, mkrs$cluster), 
                    file.path(xcel_dir, "immune_subset_cluster_markers.xlsx"))
 
-Idents(so) <- "hpca_cell_types"
-
+#Idents(so) <- "hpca_cell_types"
+Idents(so) <- "new_cell_type_ids"
 mkrs <- FindAllMarkers(so,
                        only.pos = TRUE) %>% 
          filter(p_val_adj < 0.05)
@@ -181,7 +181,7 @@ mkrs <- FindAllMarkers(so,
 write_tsv(mkrs, 
           file.path(mkrs_dir, "immune_subset_cell_type_markers.tsv"))
 
-write_markers_xlsx((split(mkrs, mkrs$cluster), 
+write_markers_xlsx(split(mkrs, mkrs$cluster), 
                    file.path(xcel_dir, "immune_subset_cell_type_markers.xlsx"))
 ```
 
@@ -413,4 +413,115 @@ go_res[["result"]] %>%
 
 ```{r }
 saveRDS(so, file.path("objects", "immune_so.rds"))
+```
+
+
+## Additional annotation
+
+```{r}
+so <- readRDS(file.path("objects", "immune_so.rds"))
+```
+Activate Macrophages look like those seen in HCC (REF) and DAM microglia seen in alzehemiers (Keren-Shaul, H., Spinrad, A., Weiner, A., Matcovitch-Natan, O., DvirSzternfeld, R., Ulland, T.K., David, E., Baruch, K., Lara-Astaiso, D., Toth, B.,
+et al. (2017). A unique microglia type associated with restricting development
+of Alzheimer’s disease. Cell 169, 1276–1290.e17).
+
+Cluster 4 expresses DC markers (similar to dc markers seen in myleoid cells in CSF of HIV patients, and in the HCC paper)
+
+Cluster 5 is similar to DCs (CD1C+) and Monocytes (CD14+/CD16-) from this scRNA-seq survey: 10.1126/science.aah4573. But also express markers of Neutrophils. 
+
+Cluster 1 is similar to the periperial myeloid cells found in glioblastoma 
+(Single-Cell RNA-Seq Analysis of Infiltrating Neoplastic Cells at the Migrating Front of Human Glioblastoma)
+
+```{r}
+immune_new_long_ids <- c(
+  "10" = "Proliferative (MKI67+, TOP2A+)",
+  "11" = "Unknown1 (SEZ6L2, AMER2)",
+  "6" = "Unknown2 (CADM1, OLR1*)",
+  "12" = "Treg (FOXP3+, CTLA4+)",
+  "0" = "T-cells (CD3G+, IL32+)",
+  "7" = "NK-cells (GNLY+, NKG7+)",
+  "9" = "B-cells (CD79A+, IGHM+)",
+ "8" = "Microglia (P2RY12+ TMEM119+)",
+ "3" = "Activated-Microglia 1 (APOE+, GPNMB+)",
+ "2" = "Activated-Microglia 2 (APOE+, TYROBP+)",
+  "1" = "Activated-Microglia 3 (CCL3+, SPP1+)",
+ "5" = "Neutrophil (S100A9+, THBS1+)",
+ "4" = "Dendritic-cell-like (CD1C+,FCER1A+)"
+)
+  
+so@meta.data$new_cell_type_ids <- immune_new_long_ids[as.character(so$fine_immune_clusters)]
+   
+
+so@meta.data$new_cell_type_ids_short <- str_split(so$new_cell_type_ids, 
+                                                  " ",
+                                                  simplify = TRUE) %>% 
+  .[, 1]
+   
+plot_umap(so, "new_cell_type_ids")
+plot_umap(so, "new_cell_type_ids_short")
+```
+
+```{r}
+saveRDS(so, file.path("objects", "immune_so.rds"))
+```
+
+Format gene lists for clustifyr
+
+
+```{r}
+library(readxl)
+sig_dir <- file.path(proj_dir, "dbases", "gene_signatures")
+
+gene_lsts <- read_excel(file.path(sig_dir, "brca", "mmc4.xlsx"),
+                skip = 1) 
+
+gene_lsts <- as.list(gene_lsts) %>% 
+  map(~.x[!is.na(.x)])
+
+additional_gene_lsts <- read_excel(file.path(sig_dir, "monocytes", "aah4573_Supplementary_Tables_1-16.xlsx"),
+                skip = 2,
+                sheet = 2) %>% split(., .$Associated.Cell.Population) %>%
+  map(~pull(.x, Gene.ID)) 
+
+gene_lsts <- c(gene_lsts, additional_gene_lsts)
+
+additional_gene_lsts <- read_excel(file.path(sig_dir, "monocytes", "aah4573_Supplementary_Tables_1-16.xlsx"),
+                skip = 2,
+                sheet = 5) %>% split(., .$Associated.Cell.Population) %>%
+  map(~pull(.x, Gene.ID)) 
+
+gene_lsts <- c(gene_lsts, additional_gene_lsts)
+
+# resets length to longest, fills with NA
+to_add <- names(gene_lsts)
+marker_df <- lapply(gene_lsts, `length<-`, max(lengths(gene_lsts))) %>% 
+ map(~tibble(gene = .x)) %>% 
+  bind_cols()
+
+colnames(marker_df) <- to_add
+
+
+res <- clustify_lists(
+  input = so,
+  per_cell = FALSE,
+  marker = marker_df,
+  marker_inmatrix = FALSE,
+  cluster_col = "fine_immune_clusters",
+  seurat_out = FALSE,
+  metric = "jaccard",
+  dr = "umap"
+)
+plot_cor_heatmap(res)
+
+# for (i in seq_along(gene_lsts)){
+#   so <- AddModuleScore(so, 
+#                        features = gene_lsts[i], 
+#                        name = names(gene_lsts)[i],
+#                        search = TRUE)
+# }
+# 
+# cols_to_plot <- colnames(so@meta.data)[which(colnames(so@meta.data) == "Treg1"):which(colnames(so@meta.data) == "pDC1")]
+# 
+# map(cols_to_plot, 
+#     ~plot_umap(so, .x, show_negative = TRUE))
 ```
