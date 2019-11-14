@@ -40,9 +40,11 @@ ortholog_table <- "../dbases/mouse_orthologs.tsv"
 if(!file.exists(ortholog_table)){
   library(biomaRt)
   ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+  
   orthologs <- getBM(mart = ensembl, 
       attributes = c("external_gene_name",
                      "mmusculus_homolog_associated_gene_name"))
+  
   write_tsv(orthologs, ortholog_table)
 }
 

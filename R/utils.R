@@ -594,7 +594,9 @@ make_cellbrowser <- function(so,
                              color_skip = NULL,
                              skip_expr_matrix = FALSE,
                              skip_markers = FALSE,
-                             overwrite_cb_config = TRUE
+                             overwrite_cb_config = TRUE,
+                             annotate_markers = TRUE,
+                             cellbrowser_dir = "/miniconda3/bin/"
                              ) {
 
   dir.create(file.path(outdir, "markers"),
@@ -687,6 +689,13 @@ make_cellbrowser <- function(so,
       select(cluster, gene, fdr = p_val_adj, avg_logFC, everything(), -p_val)
     print(cbmarker_file)
     write_tsv(mkrs, cbmarker_file)
+
+    if(annotate_markers){
+      system2(file.path(cellbrowser_dir, "cbMarkerAnnotate"),
+              args = c(cbmarker_file, paste0(cbmarker_file, ".tmp")))
+      file.rename(paste0(cbmarker_file, ".tmp"),
+                  cbmarker_file)
+    }
   } else {
     cbmarker_file <- NULL
   }
