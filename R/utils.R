@@ -79,6 +79,7 @@ walk(c(fig_dir, mkrs_dir, tbls_dir, xcel_dir),
 #' dr method present in seurat_obj@dr (e.g. umap, pca, tsne). defaults to tsne
 #' @param show_negative By default the legend value for continuous features will be clipped at zero.
 #' If false, then the minumum value for the plotted feature will be used.
+#' @param dims which dims to plot from embedding, defaults to first and second, i.e. c(1,2).
 plot_feature <- function(seurat_obj,
                          feature = NULL,
                          plot_dat = NULL,
@@ -95,7 +96,8 @@ plot_feature <- function(seurat_obj,
                          legend_title = NULL,
                          embedding = "tsne",
                          show_negative = FALSE,
-                         minimal_theme = FALSE){
+                         minimal_theme = FALSE,
+                         dims = c(1, 2)){
 
   mdata <- seurat_obj@meta.data %>% tibble::rownames_to_column("cell")
 
@@ -108,8 +110,9 @@ plot_feature <- function(seurat_obj,
     tibble::rownames_to_column("cell")
 
   embed_cols <- colnames(embed_dat)
-  xcol <- embed_cols[2]
-  ycol <- embed_cols[3]
+  dims_to_plot <- dims + 1
+  xcol <- embed_cols[dims_to_plot[1]]
+  ycol <- embed_cols[dims_to_plot[2]]
 
   embed_dat <- left_join(mdata, embed_dat, by = "cell")
 
@@ -149,6 +152,9 @@ plot_feature <- function(seurat_obj,
     geom_point(aes_string(color = paste0("`", color_aes_str, "`")),
                size = pt_size,
                alpha = pt_alpha)
+
+  p <- p + labs(x = str_replace(xcol, "_", " "),
+                y = str_replace(ycol, "_", " "))
 
   ## discrete or continuous data?
   if (typeof(embed_dat[[feature]]) %in% c(
@@ -253,21 +259,15 @@ plot_feature <- function(seurat_obj,
 
 
 plot_umap <- function(...){
-  plot_feature(..., embedding = "umap") +
-    labs(x = "UMAP 1",
-         y = "UMAP 2")
+  plot_feature(..., embedding = "umap")
 }
 
 plot_tsne <- function(...){
-  plot_feature(..., embedding = "tsne") +
-    labs(x = "tSNE 1",
-         y = "tSNE 2")
+  plot_feature(..., embedding = "tsne")
 }
 
 plot_pca <- function(...){
-  plot_feature(..., embedding = "pca") +
-    labs(x = "PC 1",
-         y = "PC 2")
+  plot_feature(..., embedding = "pca")
 }
 
 plot_violin <- function(df, .x, .y,
@@ -436,6 +436,16 @@ write_markers_xlsx <- function(mrkr_list,
 
 }
 
+#' @param sobj seurat object
+#' @param col metadata column for averaging
+#' @param path output path
+write_avg_expr <- function(sobj, col, path) {
+  Idents(sobj) <- col
+  expr <- AverageExpression(sobj, return.seurat = FALSE)
+  expr <- as.data.frame(expr) %>%
+    tibble::rownames_to_column("gene")
+  write_tsv(expr, path)
+}
 
 #' Extract out reduced dimensions and cell metadata to tibble
 #'
@@ -580,6 +590,58 @@ is_discrete <- function(x) {
   is.character(x) | is.logical(x) | is.factor(x)
 }
 
+### Compute similarities between gene lists
+
+jaccard_index <- function(x, y) {
+  length(intersect(x, y)) / length(union(x, y))
+}
+
+jaccard_lists <- function(x, y){
+  mat <- matrix(nrow = length(x),
+                ncol = length(y),
+                dimnames = list(names(x), names(y)))
+
+  to_comp <- expand.grid(names(x), names(y), stringsAsFactors = FALSE)
+
+  for (i in 1:nrow(to_comp)){
+    x_id <- to_comp[i, 1]
+    y_id <- to_comp[i, 2]
+
+    mat[x_id, y_id] <- jaccard_index(x[[x_id]], y[[y_id]])
+
+  }
+  mat
+}
+
+set_shared_orthologs <- function(so1, so2, orthologs){
+  mat1 <- so1@assays$RNA@data
+  mat2 <- so2@assays$RNA@data
+
+  mat1_orthos <- left_join(tibble(id = rownames(mat1)), orthologs, by = c("id" = "external_gene_name"))
+  mat2_orthos <- left_join(tibble(id = rownames(mat2)), orthologs, by = c("id" = "mmusculus_homolog_associated_gene_name"))
+
+  if(!all(mat2_orthos$id == rownames(mat2))){
+    stop("check ortholog table, not 1 to 1 mapping")
+  }
+
+  if(!all(mat1_orthos$id == rownames(mat1))){
+    stop("check ortholog table, not 1 to 1 mapping")
+  }
+  shared_orthos <- intersect(mat1_orthos$ortho_id, mat2_orthos$ortho_id) %>% na.omit()
+
+  mat1_orthos <- filter(mat1_orthos, ortho_id %in% shared_orthos)
+  mat2_orthos <- filter(mat2_orthos, ortho_id %in% shared_orthos)
+  mat1 <- mat1[mat1_orthos$id, ]
+  mat2 <- mat2[mat2_orthos$id, ]
+
+  rownames(mat1) <- mat1_orthos$ortho_id
+  rownames(mat2) <- mat2_orthos$ortho_id
+
+  #reorder mat1 and mat2 to have same row orders
+  mat2 <- mat2[rownames(mat1), ]
+
+  list(mat1 = mat1, mat2 = mat2)
+}
 ### Cell browser
 make_cellbrowser <- function(so,
                              column_list = NULL,
