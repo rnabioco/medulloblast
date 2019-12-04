@@ -49,6 +49,19 @@ if(!file.exists(ortholog_table)){
 }
 
 orthologs <- read_tsv(ortholog_table)
+
+orthologs <- filter(orthologs,
+                            !is.na(mmusculus_homolog_associated_gene_name)) %>% 
+  group_by(external_gene_name) %>% 
+  mutate(n_orthos_h = n()) %>% 
+  group_by(mmusculus_homolog_associated_gene_name) %>% 
+  mutate(n_orthos_m = n()) %>% 
+  filter(n_orthos_h == 1, n_orthos_m == 1) %>% 
+  select(-starts_with("n_orthos")) %>% 
+  ungroup()
+
+orthologs <- mutate(orthologs, 
+                    ortho_id = str_c(external_gene_name, ":", mmusculus_homolog_associated_gene_name))
 ```
 
 # SHH mouse model
@@ -443,6 +456,9 @@ so <- readRDS(file.path("objects",
                   "mouse_models",
                   "shh_model_sobj.rds"))
 
+so@meta.data <- so@meta.data[!str_detect(colnames(so@meta.data),
+                                         "^SHH-")]
+
 if(!file.exists("../docs/northcutt_sup_tbl_2.xlsx")){
   supp_tbl_2 <- "https://static-content.springer.com/esm/art%3A10.1038%2Fs41586-019-1434-6/MediaObjects/41586_2019_1434_MOESM3_ESM.xlsx"
 
@@ -475,24 +491,31 @@ mps <- map(mps,
       na.omit())
 
 ssh_mps <- mps[str_subset(names(mps), "SHH")]
+
+mp_ids <- c(
+  "SHH-A-cell_cycle",
+  "SHH-B-SHH_signaling",
+  "SHH-C-Differentiation"
+)
+
+names(ssh_mps) <- mp_ids
+
 for (i in seq_along(ssh_mps)){
   so <- AddModuleScore(so, 
                        features = list(c(ssh_mps[[i]])),
                        ctrl = 50,
-                       name = str_c( names(ssh_mps)[i], "_metafactor"),
+                       name = names(ssh_mps)[i],
                        seed = 42)
 }
 
+new_ids <- str_c(mp_ids, "1")
+new_id_idx <- match(new_ids, colnames(so@meta.data))
+colnames(so@meta.data)[new_id_idx] <- mp_ids
+  
+  
+names(mp_ids) <- paste0("Hovestadt_et_al_", mp_ids)
 
-shh_mps <- c(
-  "SHH-A_metafactor1",
-  "SHH-B_metafactor1",
-  "SHH-C_metafactor1"
-)
-names(shh_mps) <- paste0("Hovestadt_et_al_", "SHH-",
-                         c("A", "B", "C"))
-
-plts <- imap(shh_mps,
+plts <- imap(mp_ids,
             ~plot_feature(so, 
                .x, 
                embedding = "umap", 
@@ -500,11 +523,16 @@ plts <- imap(shh_mps,
                minimal_theme = TRUE) + 
               labs(title = .y))
 
-iwalk(plts, 
+out_ids <- names(plts) %>% 
+  str_split(., "-") %>% 
+  map_chr(., ~str_c(.x[1:2], collapse = "-")) 
+
+walk2(plts, out_ids, 
     ~save_plot(file.path(fig_dir, 
                          paste0("umap_shh_by_", .y, ".pdf")),
           .x, 
-          base_asp = 1))
+          base_asp = 1.0))
+
 
 ```
 
@@ -585,7 +613,7 @@ so <- AddModuleScore(so,
                        seed = 42)
 
 new_cols <- paste0("tmp_", 1:length(unique(human_markers$cluster)))
-new_col_idx <- map_int(new_cols, ~which(.x == colnames(so@meta.data)))
+new_col_idx <- match(new_cols, colnames(so@meta.data))
 better_cols <- names(human_modules)
 
 # fix column names
@@ -616,6 +644,214 @@ save_plot(file.path(fig_dir, "umap_shh_by_SHH_human_signatures.pdf"),
 saveRDS(so, file.path("objects",
                   "mouse_models",
                   "shh_model_sobj.rds"))
+```
+
+
+## subcluster immune cells
+
+Assess the similarities between the human SHH immune compartment and the SHH mouse model. 
+
+```{r}
+so <- readRDS(file.path("objects",
+                  "mouse_models",
+                  "shh_model_sobj.rds"))
+
+so <- subset(so, subset = cell_types %in% c("macrophages",
+                                            "monocytes"))
+so <- ScaleData(so)
+so <- RunPCA(so, npcs = 30, verbose = FALSE)
+ElbowPlot(so, ndims = 30)
+
+so <- FindNeighbors(so, 
+                    reduction = "pca", 
+                    dims = 1:30, 
+                    k.param = 10)
+
+so <- RunUMAP(so, 
+              graph = "RNA_snn", 
+              min.dist = 0.3)
+
+plot_umap(so, "UPN")
+
+plot_umap(so, "cell_types")
+```
+
+```{r}
+so <- FindClusters(so, resolution = c(0.1, 0.3, 0.5))
+
+so$immune_clusters<- so$RNA_snn_res.0.5
+so$seurat_clusters <- NULL
+so$RNA_snn_res.0.5 <- NULL
+so$RNA_snn_res.0.3 <- NULL
+so$RNA_snn_res.0.1 <- NULL
+
+plts <- list()
+plts[[1]] <- plot_feature(so, "immune_clusters",
+                          embedding = "umap") + 
+  guides(color = guide_legend(ncol = 2,
+                              override.aes = list(size = 4))) + 
+  labs(title = "All samples")
+plts[[2]] <- plot_features_split(so, 
+                                 "immune_clusters", 
+                                 "orig.ident",
+                                 embedding = "umap", add_title = TRUE)
+
+plts
+
+```
+
+
+```{r}
+saveRDS(so, file.path("objects",
+                  "mouse_models",
+                  "shh_model_sobj_immune.rds"))
+```
+
+```{r}
+so <- readRDS(file.path("objects",
+                  "mouse_models",
+                  "shh_model_sobj_immune.rds"))
+
+Idents(so) <- "immune_clusters"
+mkrs <- FindAllMarkers(so, only.pos = TRUE)
+
+write_tsv(mkrs, 
+          file.path(mkrs_tsv_dir, "shh_immune_cluster_markers.tsv"))
+
+mkrs_list <- split(mkrs, mkrs$cluster)
+
+write_markers_xlsx(mkrs_list, 
+           file.path(mkrs_xlsx_dr,
+                     "shh_immune_cluster_markers.xlsx"))
+```
+
+```{r}
+library(clustifyr)
+library(ComplexHeatmap)
+
+tm_average <- readRDS("/Users/kriemo/Projects/sc_repos/vanotterloo/data/tabula_muris/TM_avg_expr.rds")
+
+mdata <- get_metadata(so)
+so <- FindVariableFeatures(so)
+res <- clustify(so@assays$RNA@data, 
+                tm_average, 
+                query_genes = so@assays$RNA@var.features,
+                metadata = mdata, 
+                cluster_col = "immune_clusters", 
+                compute_method = "spearman")
+
+hmap <- Heatmap(t(res), 
+                viridis::viridis(256), 
+                "Spearman\ncorrelation",
+                row_title = "Cell types from Tabula Muris",
+                column_title = "Clusters")
+
+hmap
+```
+
+
+add our immune cluster markers from human analysis
+
+```{r}
+immune_markers <- read_tsv(file.path("markers",
+                                     "immune_subset_cell_type_markers.tsv"))
+
+# top 50 marker genes for modules and get mouse ortholog
+human_modules <- filter(immune_markers, p_val_adj < 0.05) %>% 
+  group_by(cluster) %>% 
+  arrange(p_val_adj, pct.1, .by_group = TRUE) %>% 
+  left_join(orthologs, by = c("gene" = "external_gene_name")) %>% 
+  na.omit() %>% 
+  group_by(cluster) %>% 
+  slice(1:50) %>% 
+  split(., .$cluster) %>% 
+  map(., ~pull(.x, mmusculus_homolog_associated_gene_name))
+
+# dont't name anything with "luster" or "ouvain", as will not
+# be recognized as float by ucsc cellbrowser...
+
+names(human_modules) <- paste0("Human_immune_",
+                               unique(immune_markers$cluster))
+
+so <- AddModuleScore(so, 
+                       features = human_modules,
+                       ctrl = 50,
+                       name = "tmp_",
+                       seed = 42)
+
+new_cols <- paste0("tmp_", 1:length(unique(immune_markers$cluster)))
+new_col_idx <- match(new_cols, colnames(so@meta.data))
+better_cols <- names(human_modules)
+
+# fix column names
+colnames(so@meta.data)[new_col_idx] <- better_cols
+
+names(better_cols) <- str_remove(better_cols, "Human_immune_")
+
+# get max signature score
+
+min_score <- min(so@meta.data[better_cols])
+max_score <- max(so@meta.data[better_cols])
+plt <- imap(better_cols, 
+    ~plot_umap(so, .x, show_negative = TRUE, max_y = c(min_score, max_score),
+               minimal_theme = TRUE) + 
+      labs(title = .y)) %>% 
+  plot_grid(plotlist = ., 
+            nrow = 4,
+            ncol = 3)
+
+plt 
+
+save_plot(file.path(fig_dir, "umap_shh_by_human_immune_signatures.pdf"),
+          plt, 
+          base_asp = 1,
+          nrow = 4,
+          ncol = 3)
+
+```
+
+```{r}
+mkrs <- read_tsv(file.path(mkrs_tsv_dir, "shh_immune_cluster_markers.tsv"))
+  
+mkrs <- mkrs %>% 
+  filter(p_val_adj < 0.05) %>% 
+  arrange(p_val_adj, desc(avg_logFC)) %>% 
+  group_by(cluster) %>% 
+  slice(1:50) %>% 
+  split(., .$cluster) %>% 
+  map(., ~pull(.x, "gene"))
+```
+
+```{r}
+library(clustifyr)
+library(ComplexHeatmap)
+so_h_immune <- readRDS(file.path("objects", "immune_so.rds"))
+
+ortho_mats <- set_shared_orthologs(so_h_immune, so, orthologs)
+
+h_immune_cluster_avgs <- average_clusters(ortho_mats[[1]],
+                                          so_h_immune$new_cell_type_ids)
+
+m_immune_cluster_avgs <- average_clusters(ortho_mats[[2]], 
+                                          so$immune_clusters)
+
+mat <- cbind(h_immune_cluster_avgs, m_immune_cluster_avgs)
+
+a <- rownames(mat)[order(apply(mat, 1, var), decreasing = TRUE)[1:1000]]
+
+h_var <- filter(orthologs, external_gene_name %in%
+                  VariableFeatures(so_h_immune)) %>% 
+  pull(ortho_id) 
+
+m_var <- filter(orthologs, 
+                mmusculus_homolog_associated_gene_name %in% 
+                  VariableFeatures(so)) %>%
+  pull(ortho_id) 
+
+shared_var_genes <- intersect(h_var, m_var)
+Heatmap(mat[shared_var_genes, ], 
+        show_row_names = FALSE)
+
 ```
 
 # GP mouse model
@@ -1191,6 +1427,15 @@ mps <- map(mps,
       na.omit())
 
 gp34_mps <- mps[str_subset(names(mps), "Group")]
+
+mp_ids <- c(
+  "Group 3/4-A_cell_cycle",
+  "Group 3/4-B_Translation_Myc",
+  "Group 3/4-C_Differentiation"
+)
+
+names(gp34_mps) <- mp_ids
+
 for (i in seq_along(gp34_mps)){
   so <- AddModuleScore(so, 
                        features = list(c(gp34_mps[[i]])),
@@ -1199,11 +1444,6 @@ for (i in seq_along(gp34_mps)){
                        seed = 42)
 }
 
-gp34_mps <- c(
-  "Group 3/4-A_metafactor1",
-  "Group 3/4-B_metafactor1",
-  "Group 3/4-C_metafactor1"
-)
 
 names(gp34_mps) <- paste0("Hovestadt_et_al_", "Group 3 and 4-", c("A", "B", "C"))
 
@@ -1287,13 +1527,229 @@ saveRDS(so, file.path("objects",
                   "mb_models_sobj.rds"))
 ```
 
+
+
+## Pull out immune subclusters
+
+
+Assess the similarities between the human immune compartment and the mouse models. 
+
+```{r}
+so <- readRDS(file.path("objects",
+                  "mouse_models",
+                  "mb_models_sobj.rds"))
+
+so <- subset(so, subset = cell_types %in% c("CTLA4+ t-cells",
+                                            "monocytes"))
+so <- ScaleData(so)
+so <- RunPCA(so, npcs = 30, verbose = FALSE)
+ElbowPlot(so, ndims = 30)
+
+so <- FindNeighbors(so, 
+                    reduction = "pca", 
+                    dims = 1:30, 
+                    k.param = 10)
+
+so <- RunUMAP(so, 
+              graph = "RNA_snn", 
+              min.dist = 0.3)
+
+plot_umap(so, "UPN")
+
+plot_umap(so, "cell_types")
+```
+
+```{r}
+so <- FindClusters(so, resolution = c(0.1, 0.3, 0.5))
+
+so$immune_clusters<- so$RNA_snn_res.0.5
+so$seurat_clusters <- NULL
+so$RNA_snn_res.0.3 <- NULL
+so$RNA_snn_res.0.1 <- NULL
+
+plts <- list()
+plts[[1]] <- plot_feature(so, "immune_clusters",
+                          embedding = "umap") + 
+  guides(color = guide_legend(ncol = 2,
+                              override.aes = list(size = 4))) + 
+  labs(title = "All samples")
+plts[[2]] <- plot_features_split(so, 
+                                 "immune_clusters", 
+                                 "orig.ident",
+                                 embedding = "umap", add_title = TRUE)
+
+plts
+
+```
+
+```{r}
+saveRDS(so, file.path("objects",
+                  "mouse_models",
+                  "mb_models_immune_sobj.rds"))
+```
+
+```{r}
+so <- readRDS(file.path("objects",
+                  "mouse_models",
+                  "mb_models_immune_sobj.rds"))
+
+Idents(so) <- "immune_clusters"
+mkrs <- FindAllMarkers(so, only.pos = TRUE)
+
+write_tsv(mkrs, 
+          file.path(mkrs_tsv_dir, "grp34_immune_cluster_markers.tsv"))
+
+mkrs_list <- split(mkrs, mkrs$cluster)
+
+write_markers_xlsx(mkrs_list, 
+           file.path(mkrs_xlsx_dr,
+                     "grp34_immune_cluster_markers.xlsx"))
+```
+
+```{r}
+library(clustifyr)
+library(ComplexHeatmap)
+
+tm_average <- readRDS("/Users/kriemo/Projects/sc_repos/vanotterloo/data/tabula_muris/TM_avg_expr.rds")
+
+mdata <- get_metadata(so)
+so <- FindVariableFeatures(so)
+res <- clustify(so@assays$RNA@data, 
+                tm_average, 
+                query_genes = so@assays$RNA@var.features,
+                metadata = mdata, 
+                cluster_col = "immune_clusters", 
+                compute_method = "spearman")
+
+hmap <- Heatmap(t(res), 
+                viridis::viridis(256), 
+                "Spearman\ncorrelation",
+                row_title = "Cell types from Tabula Muris",
+                column_title = "Clusters")
+
+hmap
+```
+
+
+add our immune cluster markers from human analysis
+
+```{r}
+immune_markers <- read_tsv(file.path("markers",
+                                     "immune_subset_cell_type_markers.tsv"))
+
+# top 50 marker genes for modules and get mouse ortholog
+human_modules <- filter(immune_markers, p_val_adj < 0.05) %>% 
+  group_by(cluster) %>% 
+  arrange(p_val_adj, desc(pct.1), .by_group = TRUE) %>% 
+  left_join(orthologs, by = c("gene" = "external_gene_name")) %>% 
+  na.omit() %>% 
+  group_by(cluster) %>% 
+  slice(1:50) %>% 
+  split(., .$cluster) %>% 
+  map(., ~pull(.x, mmusculus_homolog_associated_gene_name))
+
+# dont't name anything with "luster" or "ouvain", as will not
+# be recognized as float by ucsc cellbrowser...
+
+names(human_modules) <- paste0("Human_immune_",
+                               unique(immune_markers$cluster))
+
+so <- AddModuleScore(so, 
+                       features = human_modules,
+                       ctrl = 50,
+                       name = "tmp_",
+                       seed = 42)
+
+new_cols <- paste0("tmp_", 1:length(unique(immune_markers$cluster)))
+new_col_idx <- match(new_cols, colnames(so@meta.data))
+better_cols <- names(human_modules)
+
+# fix column names
+colnames(so@meta.data)[new_col_idx] <- better_cols
+
+names(better_cols) <- str_remove(better_cols, "Human_immune_")
+
+# get max signature score
+
+min_score <- min(so@meta.data[better_cols])
+max_score <- max(so@meta.data[better_cols])
+plt <- imap(better_cols, 
+    ~plot_umap(so, .x, 
+               show_negative = TRUE, 
+             #  max_y = c(min_score, max_score),
+               minimal_theme = TRUE) + 
+      labs(title = .y)) %>% 
+  plot_grid(plotlist = ., 
+            nrow = 4,
+            ncol = 3)
+
+plt 
+
+save_plot(file.path(fig_dir, "umap_gp34_by_human_immune_signatures.pdf"),
+          plt, 
+          base_asp = 1,
+          nrow = 4,
+          ncol = 3)
+
+```
+
+```{r}
+mkrs <- read_tsv(file.path(mkrs_tsv_dir, "grp34_immune_cluster_markers.tsv"))
+  
+mkrs <- mkrs %>% 
+  filter(p_val_adj < 0.05) %>% 
+  arrange(p_val_adj, desc(avg_logFC)) %>% 
+  group_by(cluster) %>% 
+  slice(1:50) %>% 
+  split(., .$cluster) %>% 
+  map(., ~pull(.x, "gene"))
+
+jaccard_lists(mkrs, human_modules)
+```
+
+```{r}
+
+so_h_immune <- readRDS(file.path("objects", "immune_so.rds"))
+
+ortho_mats <- set_shared_orthologs(so_h_immune, so, orthologs)
+
+h_immune_cluster_avgs <- average_clusters(ortho_mats[[1]],
+                                          so_h_immune$new_cell_type_ids)
+
+m_immune_cluster_avgs <- average_clusters(ortho_mats[[2]], 
+                                          so$immune_clusters)
+
+mat <- cbind(h_immune_cluster_avgs, m_immune_cluster_avgs)
+
+a <- rownames(mat)[order(apply(mat, 1, var), decreasing = TRUE)[1:1000]]
+
+h_var <- filter(orthologs, external_gene_name %in%
+                  VariableFeatures(so_h_immune)) %>% 
+  pull(ortho_id) 
+
+m_var <- filter(orthologs, mmusculus_homolog_associated_gene_name %in% 
+                  VariableFeatures(so)) %>%
+  pull(ortho_id) 
+
+shared_var_genes <- intersect(h_var, m_var)
+hmap <- Heatmap(mat[shared_var_genes, ], 
+                name = "Log expression",
+        show_row_names = FALSE)
+
+pdf("figs/mouse_models/grp3_human_immune_comp.pdf", width = 8, height = 16)
+draw(hmap)
+dev.off()
+```
+
+
+
+
 # Combine datasets 
 
 
 ```{r}
-so <- readRDS(file.path("objects", "mouse_models", "mb_models_sobj.rds"))
-so2 <- readRDS(file.path("objects", "mouse_models", "shh_model_sobj.rds"))
-
+so <- readRDS(file.path("objects", "mouse_models", "mb_models_immune_sobj.rds"))
+so2 <- readRDS(file.path("objects", "mouse_models", "shh_model_sobj_immune.rds"))
 
 so <- merge(so, so2)
 
@@ -1318,45 +1774,262 @@ so <- FindNeighbors(so,
 
 so <- RunUMAP(so, 
               graph = "RNA_snn", 
-              min.dist = 0.3
+              min.dist = 0.5
 )
 
-
-plts <- list()
-plts[[1]] <- plot_umap(so, "orig.ident") + labs(title = "All samples")
-plts[[2]] <- plot_umap(so, "cell_types") + labs(title = "All samples")
-plts[3:8] <- plot_features_split(so, "cell_types", "orig.ident", embedding = "umap", add_title = TRUE)
-
-p <- plot_grid(plotlist = plts, nrow = 2, ncol = 4)
-p
-
-
-saveRDS(so, file.path("objects", "mouse_models", "combined.rds"))
 ```
 
 ```{r}
-so_m <- readRDS(file.path("objects", "mouse_models", "combined.rds"))
+so <- FindClusters(so, resolution = c(0.1, 0.3, 0.5))
 
+so$immune_clusters<- so$RNA_snn_res.0.5
+so$seurat_clusters <- NULL
+so$RNA_snn_res.0.3 <- NULL
+so$RNA_snn_res.0.1 <- NULL
 
-to_plot <- c(
-  "orig.ident",
-  "cell_types"
-)
-plt <- map(to_plot,
-            ~plot_umap(so_m, .x)) %>% 
-  plot_grid(plotlist = ., nrow = 1, ncol = 2,
-            rel_widths = c(1, 1.2))
+plts <- list()
+plts[[1]] <- plot_feature(so, "immune_clusters",
+                          embedding = "umap") + 
+  guides(color = guide_legend(ncol = 2,
+                              override.aes = list(size = 4))) + 
+  labs(title = "All samples")
+plts[[2]] <- plot_features_split(so, 
+                                 "immune_clusters", 
+                                 "orig.ident",
+                                 embedding = "umap", add_title = TRUE)
 
-outdir <- "figs/mouse_models"
-dir.create(outdir, showWarnings = FALSE)
+plts
+```
 
-save_plot(file.path(outdir, "umap_overview.pdf"),
-          plt,
-          nrow = 1, ncol = 2, base_asp = 1.2)
+```{r}
+
+saveRDS(so, file.path("objects", "mouse_models",
+                      "immune_combined.rds"))
+
+```
+
+```{r}
+so_m <- readRDS(file.path("objects", "mouse_models", "immune_combined.rds"))
+
+Idents(so) <- "immune_clusters"
+mkrs <- FindAllMarkers(so, only.pos = TRUE)
+
+write_tsv(mkrs, 
+          file.path(mkrs_tsv_dir, "combined_immune_cluster_markers.tsv"))
+
+mkrs_list <- split(mkrs, mkrs$cluster)
+
+write_markers_xlsx(mkrs_list, 
+           file.path(mkrs_xlsx_dr,
+                     "combined_immune_cluster_markers.xlsx"))
+```
+
+```{r fig.height = 6}
+mkrs <- read_tsv(file.path(mkrs_tsv_dir,"combined_immune_cluster_markers.tsv"))
+
+topx <- mkrs %>% 
+  arrange(p_val_adj) %>% 
+  group_by(cluster) %>% 
+  slice(1:10) 
+
+p <- DotPlot(so, 
+        features = unique(topx$gene),
+        cols = "Spectral",
+        group.by = "immune_clusters") +
+  coord_flip() +
+  labs(y = "",
+       x = "") +
+  theme(axis.text.x = element_text(size = 24, angle = 90, hjust = 0.5),
+        axis.text.y = element_text(size = 10),
+        axis.title = element_blank())
+
+p
+
+save_plot(file.path(fig_dir, 
+                    "dotplot_combined_immune_markers.pdf"), 
+          p, base_height = 24, base_asp = 0.5)
 
 
 ```
 
+
+
+```{r}
+library(clustifyr)
+library(ComplexHeatmap)
+
+tm_average <- readRDS("/Users/kriemo/Projects/sc_repos/vanotterloo/data/tabula_muris/TM_avg_expr.rds")
+
+mdata <- get_metadata(so)
+so <- FindVariableFeatures(so)
+res <- clustify(so@assays$RNA@data, 
+                tm_average, 
+                query_genes = so@assays$RNA@var.features,
+                metadata = mdata, 
+                cluster_col = "immune_clusters", 
+                compute_method = "spearman")
+
+hmap <- Heatmap(t(res), 
+                viridis::viridis(256), 
+                "Spearman\ncorrelation",
+                row_title = "Cell types from Tabula Muris",
+                column_title = "Clusters")
+
+hmap
+```
+
+
+
+#### Myeloid marker phenotypes
+```{r}
+
+myleoid_markers <- list(
+  general_markers = c(
+  "THBS1", #MDSC or Neutropils
+  "P2RY12", #Microglia
+  "CD68", # Macrophages
+  "C1QA", #TAM
+  "TREM2", #TAM
+  "APOE" #TAM
+),
+  m2_m1_markers = c(
+  "HLA-DRB1", #M1,
+  "CD86", #M1 M2c,
+  "TLR2", #M1
+  "CD163", #M2
+  "MRC1", #M2
+  "FCGR3A" #M2
+  ),
+cytokines = c(
+  "CCL3",
+  "TNF", #M1
+  "CXCL8", #M2 inflammatory (Gr3&4)
+  "IL1B", #M2 inflammatory (Grp3&4),
+  "CD274", #PDL1
+  "PDCD1LG2" #PDL2
+  )
+)
+
+myleoid_markers <- map(myleoid_markers, 
+    ~left_join(tibble(external_gene_name = .x),
+               orthologs) %>% 
+      na.omit() %>% 
+      pull(mmusculus_homolog_associated_gene_name) %>% 
+      unique()) 
+
+plts <- imap(myleoid_markers,
+            function(mkrs, id) {
+  n <- length(mkrs)
+  n_col <- ceiling(n / 2)
+  n_row <- ceiling(n / 3)
+  plt <- map(mkrs, 
+              ~plot_feature(so, 
+                .x, 
+                embedding = "umap", 
+                minimal_theme = TRUE)) %>% 
+    plot_grid(plotlist= .,
+              nrow = n_row,
+              ncol = n_col)
+
+  save_plot(file.path(fig_dir, 
+                         paste0("umap_", id, "_markers.pdf")),
+          plt, 
+          nrow = n_row,
+          ncol = n_col,
+          base_asp = 1)
+})
+
+
+```
+
+
+#### Lymphocyte marker phenotypes
+```{r}
+
+lymphocyte_markers <- list(
+  general_lymph_markers = c(
+  "CD8A", #cd4 t
+  "CD4", #cd8 t
+  "FOXP3", # Treg
+  "KLRD1" #NK cells
+),
+lymph_cytokines = c(
+  "PRF1", #Perforin
+  "GZMK", #GranzymeK
+  "PDCD1", #PD1
+  "LAG3",# exhaustion marker
+  "IL2",
+  "IFNG"
+  )
+)
+
+lymphocyte_markers <- map(lymphocyte_markers, 
+    ~left_join(tibble(external_gene_name = .x),
+               orthologs) %>% 
+      na.omit() %>% 
+      pull(mmusculus_homolog_associated_gene_name) %>% 
+      unique()) 
+
+plts <- imap(lymphocyte_markers,
+            function(mkrs, id) {
+  n <- length(mkrs)
+  n_col <- ceiling(n / 2)
+  n_row <- ceiling(n / 3)
+  plt <- map(mkrs, 
+              ~plot_feature(so, 
+                .x, 
+                embedding = "umap", 
+                minimal_theme = TRUE)) %>% 
+    plot_grid(plotlist= .,
+              nrow = n_row,
+              ncol = n_col)
+
+  save_plot(file.path(fig_dir, 
+                         paste0("umap_", id, "_markers.pdf")),
+          plt, 
+          nrow = n_row,
+          ncol = n_col,
+          base_asp = 1)
+})
+
+
+```
+
+```{r}
+
+cluster_ids <- c(
+  "6" = "Myeloid",
+  "0" = "Myeloid",
+  "1" = "Myeloid",
+  "9" = "Myeloid (SHH signaling)",
+  "3" = "T-cells (some Foxp3)",
+  "5" = "NK-cells",
+  "2" = "Monocyte",
+  "8" = "Monoctye",
+  "7" = "Granulocyte",
+  "4" = "Monocyte Non-classical",
+  "10" = "Dendritic"
+)
+
+so@meta.data$immune_cell_types <- cluster_ids[as.character(so@meta.data$immune_clusters)]
+
+plot_umap(so, "immune_cell_types")
+
+```
+
+```{r}
+so$expt_ids <- ifelse(is.na(so$expt_ids),
+                      "SHH",
+                      so$expt_ids)
+a <- plot_umap(so, "expt_ids")
+b <- plot_umap(so, "immune_clusters")
+c <- plot_umap(so, "immune_cell_types")
+plot_grid(a, b, c, nrow = 1, ncol = 3, rel_widths = c(1.25,1,1.25)) %>% 
+  save_plot(file.path(fig_dir, 
+                         paste0("umap_combined_by_id_clusters.pdf")),
+          ., 
+          base_asp = 1.4, ncol = 3, nrow = 1)
+```
 
 # Determine how well the mouse models aligns with human MB
 

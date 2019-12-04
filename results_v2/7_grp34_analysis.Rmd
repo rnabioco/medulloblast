@@ -251,13 +251,27 @@ mps <- map(mps, ~.x[, 2, drop = TRUE])
 names(mps) <- mp_names
 
 gp34_mps <- mps[str_subset(names(mps), "Group")]
+
+mp_ids <- c(
+  "Group 3/4-A-cell_cycle",
+  "Group 3/4-B-Translation_Myc",
+  "Group 3/4-C-Differentiation"
+)
+
+names(gp34_mps) <- mp_ids
+
 for (i in seq_along(gp34_mps)){
   so <- AddModuleScore(so, 
                        features = list(c(gp34_mps[[i]])),
                        ctrl = 50,
-                       name = str_c( names(gp34_mps)[i], "_metafactor"),
+                       name = names(gp34_mps)[i],
                        seed = 42)
 }
+
+new_ids <- str_c(mp_ids, "1")
+new_id_idx <- match(new_ids, colnames(so@meta.data))
+colnames(so@meta.data)[new_id_idx] <- mp_ids
+  
 
 ```
 
@@ -317,4 +331,65 @@ lfile <- as.loom(tmp_obj,filename = file.path("objects", "grp34.loom"),
 lfile$close_all()
 
 rm(tmp_obj)
+```
+
+## Get top PC genes
+
+```{r}
+to_plot <- c("UPN", "coarse_cell_type", "subgroup")
+
+dims_to_plot <- list(
+  c(1,2),
+  c(2,3),
+  c(3,4),
+  c(4,5))
+  
+plts <- list()
+for ( i in seq_along(dims_to_plot)){
+  plts[[i]] <- map(to_plot, ~plot_pca(so, .x, dims =dims_to_plot[[i]])) %>%
+  plot_grid(plotlist = ., nrow = 1, ncol = length(to_plot),
+            rel_widths = c(1.75, 1.5, 1))
+}
+
+names(plts) <- str_c("pc_", 
+                     map_chr(dims_to_plot, ~str_c(.x, collapse = "_")),
+                     ".pdf")
+pc_dir <- file.path(fig_dir, "pcs_grp34")
+dir.create(pc_dir)
+iwalk(plts,
+  ~save_plot(file.path(pc_dir, .y), .x, nrow = 1, ncol = 3))
+
+
+pc_loadings <- so@reductions$pca@feature.loadings[, 1:20] %>% 
+  as.data.frame() %>% 
+  tibble::rownames_to_column("gene") %>% 
+  arrange(desc(PC_1))
+
+
+pc_tbl_dir <- file.path(tbls_dir, "pcs", "grp34")
+dir.create(pc_tbl_dir, recursive = TRUE)
+write_tsv(pc_loadings, file.path(pc_tbl_dir,
+                                 "pc_loadings.tsv.gz"))
+
+tibble(pc = str_c("PC", 1:length(so@reductions$pca@stdev)), 
+                  stdev = so@reductions$pca@stdev) %>% 
+  write_tsv(file.path(pc_tbl_dir, "pc_variance_explained.tsv"))
+```
+
+
+
+## Average Expression per cluster
+
+```{r}
+plot_feature(so, 
+             "coarse_clusters_gp34_harmony",
+             embedding = "umap_harmony")
+
+avg_tbl_dir <- file.path(tbls_dir, "avg_expr", "grp34")
+dir.create(avg_tbl_dir, recursive = TRUE)
+
+write_avg_expr(so,  
+               "coarse_clusters_gp34_harmony",
+               file.path(avg_tbl_dir, 
+                         "avgexpr.tsv.gz"))
 ```

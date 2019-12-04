@@ -439,10 +439,11 @@ write_markers_xlsx <- function(mrkr_list,
 #' @param sobj seurat object
 #' @param col metadata column for averaging
 #' @param path output path
-write_avg_expr <- function(sobj, col, path) {
+#' @param assay assay to write out, defaults to RNA
+write_avg_expr <- function(sobj, col, path, assay = "RNA") {
   Idents(sobj) <- col
   expr <- AverageExpression(sobj, return.seurat = FALSE)
-  expr <- as.data.frame(expr) %>%
+  expr <- as.data.frame(expr[[assay]]) %>%
     tibble::rownames_to_column("gene")
   write_tsv(expr, path)
 }

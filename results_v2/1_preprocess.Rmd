@@ -520,5 +520,33 @@ mdata_out <- get_metadata(so)
 outname <- file.path("tables", 
                      paste0("metadata_", format(Sys.Date(), "%Y_%m_%d"), ".tsv.gz"))
 write_tsv(mdata_out, outname)
+
 ```
 
+## Get top PC genes
+
+```{r}
+so <- readRDS(file.path("objects", "so.rds"))
+to_plot <- c("UPN", "coarse_cell_type", "subgroup")
+
+dims_to_plot <- list(
+  c(1,2),
+  c(2,3),
+  c(3,4),
+  c(4,5))
+  
+plts <- list()
+for ( i in seq_along(dims_to_plot)){
+  plts[[i]] <- map(to_plot, ~plot_pca(so, .x, dims =dims_to_plot[[i]])) %>%
+  plot_grid(plotlist = ., nrow = 1, ncol = length(to_plot),
+            rel_widths = c(1.75, 1.5, 1))
+}
+
+names(plts) <- str_c("pc_", 
+                     map_chr(dims_to_plot, ~str_c(.x, collapse = "_")),
+                     ".pdf")
+pc_dir <- file.path(fig_dir, "pcs_all_cells")
+dir.create(pc_dir)
+iwalk(plts,
+  ~save_plot(file.path(pc_dir, .y), .x, nrow = 1, ncol = 3))
+```

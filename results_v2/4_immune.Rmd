@@ -408,6 +408,47 @@ go_res[["result"]] %>%
 ```
 
 
+### Each cell type
+```{r}
+library(gprofiler2)
+mkrs <- read_tsv(file.path(mkrs_dir, 
+                    "immune_subset_cell_type_markers.tsv")) %>% 
+  filter( p_val_adj < 0.05) 
+
+map(unique(mkrs$cluster), function(x){
+  clust_mkrs <- filter(mkrs, cluster == x) %>% 
+    pull(gene)
+go_res <- gost(clust_mkrs, 
+               ordered_query = TRUE,
+               sources = c("GO", 
+                          "KEGG", 
+                          "REAC", 
+                          "TF"))
+p <- gostplot(go_res, 
+              interactive = FALSE)
+              
+
+text_data <- group_by(p$data, 
+                      source) %>% 
+  slice(1:2)
+
+p + 
+  geom_text_repel(data = text_data, aes(label = term_name))
+
+go_res[["result"]] %>% 
+  mutate(parents = unlist(map(parents, ~str_c(.x, collapse = ",")))) %>% 
+  write_tsv(., file.path(tbls_dir, str_c(x, "_goterms.tsv")))
+
+go_res[["result"]] %>% 
+  mutate(parents = unlist(map(parents, ~str_c(.x, collapse = ","))),
+         source = str_replace_all(source, "[[:punct:]]", " ")) %>% 
+  select(-significant, -query) %>% 
+  split(., .$source) %>% 
+  openxlsx::write.xlsx(., file.path(tbls_dir, 
+                                    str_c(x, "_goterms.xlsx")))
+})
+```
+
 
 ## save object
 
@@ -525,3 +566,21 @@ plot_cor_heatmap(res)
 # map(cols_to_plot, 
 #     ~plot_umap(so, .x, show_negative = TRUE))
 ```
+
+
+## Average Expression per cluster
+
+```{r}
+plot_feature(so, 
+             "new_cell_type_ids",
+             embedding = "umap")
+
+avg_tbl_dir <- file.path(tbls_dir, "avg_expr", "immune")
+dir.create(avg_tbl_dir, recursive = TRUE)
+
+write_avg_expr(so,  
+               "new_cell_type_ids",
+               file.path(avg_tbl_dir, 
+                         "avgexpr.tsv.gz"))
+```
+

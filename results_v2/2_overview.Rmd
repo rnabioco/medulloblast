@@ -168,6 +168,10 @@ save_plot(file.path(fig_dir, "umap_neoplastic_by_UPN.pdf"),
 
 # SHH tumors
 
+```{r}
+so <- readRDS(file.path("objects", "shh.rds"))
+```
+
 ### Various genes in SHH
 
 
@@ -279,11 +283,12 @@ Yep.
 
 ```{r}
 shh_mps <- c(
-  "SHH-A_metafactor1",
-  "SHH-B_metafactor1",
-  "SHH-C_metafactor1"
+  "SHH-A-cell_cycle",
+  "SHH-B-SHH_signaling",
+  "SHH-C-Differentiation"
 )
-names(shh_mps) <- paste0("Hovestadt_et_al_", "SHH-", c("A", "B", "C"))
+
+names(shh_mps) <- paste0("Hovestadt_et_al_", shh_mps)
 
 plts <- imap(shh_mps,
             ~plot_feature(so, 
@@ -293,7 +298,11 @@ plts <- imap(shh_mps,
                minimal_theme = TRUE) + 
               labs(title = .y))
 
-iwalk(plts, 
+out_ids <- names(plts) %>% 
+  str_split(., "-") %>% 
+  map_chr(., ~str_c(.x[1:2], collapse = "-"))
+
+walk2(plts, out_ids, 
     ~save_plot(file.path(fig_dir, 
                          paste0("umap_shh_by_", .y, ".pdf")),
           .x, 
@@ -508,14 +517,15 @@ save_plot(file.path(fig_dir,
 
 
 ```{r}
-shh_mps <- c(
-  "Group 3/4-A_metafactor1",
-  "Group 3/4-B_metafactor1",
-  "Group 3/4-C_metafactor1"
+mp_ids <- c(
+  "Group 3/4-A-cell_cycle",
+  "Group 3/4-B-Translation_Myc",
+  "Group 3/4-C-Differentiation"
 )
-names(shh_mps) <- paste0("Hovestadt_et_al_", "Group 3 and 4-", c("A", "B", "C"))
 
-plts <- imap(shh_mps,
+names(mp_ids) <- paste0("Hovestadt_et_al_", mp_ids)
+
+plts <- imap(mp_ids,
             ~plot_feature(so, 
                .x, 
                embedding = "umap_harmony", 
@@ -523,7 +533,12 @@ plts <- imap(shh_mps,
                minimal_theme = TRUE) + 
               labs(title = .y))
 
-iwalk(plts, 
+out_ids <- names(plts) %>% 
+  str_split(., "-") %>% 
+  map_chr(., ~str_c(.x[1:2], collapse = "-")) %>% 
+  str_replace("3/4", "3 and 4")
+
+walk2(plts, out_ids, 
     ~save_plot(file.path(fig_dir, 
                          paste0("umap_gp34_by_", .y, ".pdf")),
           .x, 
@@ -718,6 +733,59 @@ save_plot(file.path(immune_fig_dir,
           p,
           base_asp = 0.75,
           base_height = 6)
+
+
+p <- plt_dat %>% 
+  gather(subgroup, percent, -new_cell_type_ids) %>% 
+  mutate(subgroup = factor(subgroup, levels = levels(so$subgroup))) %>%
+  ggplot(aes(subgroup, percent)) +
+  geom_col(aes(fill = new_cell_type_ids)) +
+  scale_fill_manual(name = "", 
+                    values = discrete_palette_default) +
+  labs(x = "",
+       y = "Percent of Cells") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+p
+
+save_plot(file.path(immune_fig_dir, 
+                    "barplot_cell_percentages_v2.pdf"),
+          p,
+          base_asp = 1,
+          base_height = 6)
+
+simple_mdata <- so@meta.data %>% 
+  select(UPN, subgroup) %>% 
+  unique()
+
+plt_dat <- so@meta.data %>% 
+  group_by(UPN, subgroup) %>% 
+  mutate(total_cells = n()) %>% 
+  group_by(UPN, new_cell_type_ids) %>% 
+  summarize(percent_of_cells = 100 * n() / unique(total_cells)) %>% 
+  spread(UPN, percent_of_cells, fill = 0L)
+
+p <- plt_dat %>% 
+  gather(UPN, percent, -new_cell_type_ids) %>% 
+  left_join(simple_mdata) %>% 
+  mutate(subgroup = factor(subgroup, levels = levels(so$subgroup))) %>%
+  ggplot(aes(UPN, percent)) +
+  geom_col(aes(fill = new_cell_type_ids)) +
+  facet_grid(~subgroup, scales = "free_x",  space = "free_x") +
+  scale_fill_manual(name = "", 
+                    values = discrete_palette_default) +
+  labs(x = "",
+       y = "Percent of Cells") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+p
+
+save_plot(file.path(immune_fig_dir, 
+                    "barplot_cell_percentages_per_tumor.pdf"),
+          p,
+          base_asp = 2,
+          base_height = 6)
+
 ```
 
 ### cluster markers
@@ -750,7 +818,7 @@ save_plot(file.path(immune_fig_dir,
 
 ```
 
-heatmap
+## heatmap Myeloid
 
 ```{r}
 to_plot <- c(
@@ -769,6 +837,9 @@ topx <- read_tsv(file.path(mkrs_dir,"immune_subset_cell_type_markers.tsv")) %>%
   arrange(p_val_adj, .by_group = TRUE) %>% 
   slice(1:10)
 
+all_ids <- sort(unique(so$new_cell_type_ids)) 
+cols_to_use <- discrete_palette_default[which(all_ids %in% to_plot)]
+
 so <- ScaleData(so, features = rownames(so))
 
 tmp_so <- subset(so, 
@@ -777,7 +848,7 @@ tmp_so <- subset(so,
 tmp_so$new_cell_type_ids <- factor(tmp_so$new_cell_type_ids)
 
 p <- DoHeatmap(tmp_so, 
-               group.colors = discrete_palette_default,
+               group.colors = cols_to_use,
                features = unique(topx$gene),
                group.by = "new_cell_type_ids",
                angle = 45, 
@@ -794,85 +865,182 @@ save_plot(file.path(immune_fig_dir, "heatmap_markers_microglia.pdf"),
           base_width = 10,
           base_height = 12)
 ```
-### Northcutt metaprograms
 
+
+## heatmap Lymphocytes
 
 ```{r}
-shh_mps <- c(
-  "Group 3/4-A_metafactor1",
-  "Group 3/4-B_metafactor1",
-  "Group 3/4-C_metafactor1"
+to_plot <- c(
+  "Unknown1 (SEZ6L2, AMER2)",
+  "Unknown2 (CADM1, OLR1*)",
+  "Proliferative (MKI67+, TOP2A+)",
+  "Treg (FOXP3+, CTLA4+)",
+  "NK-cells (GNLY+, NKG7+)",
+  "T-cells (CD3G+, IL32+)",
+  "B-cells (CD79A+, IGHM+)"
 )
-names(shh_mps) <- paste0("Hovestadt_et_al_", "Group 3 and 4-", c("A", "B", "C"))
 
-plts <- imap(shh_mps,
-            ~plot_feature(so, 
-               .x, 
-               embedding = "umap_harmony", 
-               show_negative = TRUE,
-               minimal_theme = TRUE) + 
-              labs(title = .y))
+all_ids <- sort(unique(so$new_cell_type_ids)) 
+cols_to_use <- discrete_palette_default[which(all_ids %in% to_plot)]
 
-iwalk(plts, 
-    ~save_plot(file.path(fig_dir, 
-                         paste0("umap_gp34_by_", .y, ".pdf")),
-          .x, 
-          base_asp = 1.4))
+topx <- read_tsv(file.path(mkrs_dir,"immune_subset_cell_type_markers.tsv")) %>% 
+  filter(p_val_adj < 0.05,
+         cluster %in% to_plot) %>% 
+  group_by(cluster) %>% 
+  arrange(p_val_adj, .by_group = TRUE) %>% 
+  slice(1:10)
 
+tmp_so <- subset(so, 
+                 subset = new_cell_type_ids %in% to_plot)
+
+#tmp_so <- ScaleData(tmp_so, features = rownames(tmp_so))
+
+tmp_so$new_cell_type_ids <- factor(tmp_so$new_cell_type_ids)
+
+p <- DoHeatmap(tmp_so, 
+               group.colors = cols_to_use,
+               features = unique(topx$gene),
+               group.by = "new_cell_type_ids",
+               angle = 45, 
+               size = 4,
+               raster = FALSE, 
+               draw.lines = TRUE)
+
+p <- p +
+  scale_fill_gradientn(colours = viridis::viridis(256),
+                       name = "Expression\nZ-scores")
+
+save_plot(file.path(immune_fig_dir, "heatmap_markers_lymphocytes.pdf"), 
+          p,
+          base_width = 10,
+          base_height = 14)
 ```
 
 ### plot various gnes
 
-Most of the tSNE plots show really sparse and low expression of these genes. Not sure how reliable those finding are. 
-
+#### Myeloid marker phenotypes
 ```{r}
 
-famous_genes <- c(
-  "EOMES",
-  "MYC",
-  "NRL",
-  "TOP2A",
-  "CRX",
-  "ROM1"
+myleoid_markers <- list(
+  general_markers = c(
+  "THBS1", #MDSC or Neutropils
+  "P2RY12", #Microglia
+  "CD68", # Macrophages
+  "C1QA", #TAM
+  "TREM2", #TAM
+  "APOE" #TAM
+),
+  m2_m1_markers = c(
+  "HLA-DRB1", #M1,
+  "CD86", #M1 M2c,
+  "TLR2", #M1
+  "CD163", #M2
+  "MRC1", #M2
+  "FCGR3A" #M2
+  ),
+cytokines = c(
+  "CCL3",
+  "TNF", #M1
+  "CXCL8", #M2 inflammatory (Gr3&4)
+  "IL1B", #M2 inflammatory (Grp3&4),
+  "CD274", #PDL1
+  "PDCD1LG2" #PDL2
+  )
 )
 
-plts <- map(famous_genes,
-            ~plot_feature(so, 
-               .x, 
-               embedding = "umap_harmony", 
-               minimal_theme = TRUE) )
-names(plts) <- famous_genes
-iwalk(plts, 
-    ~save_plot(file.path(fig_dir, 
-                         paste0("umap_gp34_by_", .y, ".pdf")),
-          .x, 
-          base_asp = 1.4))
+myl_cell_types <- c(
+  "Dendritic-cell-like",
+  "Activated-Microglia",
+  "Neutrophil",
+  "Microglia"
+)
+
+myl_so <- so[, so$new_cell_type_ids_short %in% myl_cell_types]
+  
+umap_lims <- coord_cartesian(xlim = c(-7, 7), ylim = c(-14, 0))
+plts <- imap(myleoid_markers,
+            function(mkrs, id) {
+  n <- length(mkrs)
+  n_col <- ceiling(n / 2)
+  n_row <- ceiling(n / 3)
+  plt <- map(mkrs, 
+              ~plot_feature(myl_so, 
+                .x, 
+                embedding = "umap", 
+                minimal_theme = TRUE) + 
+               umap_lims) %>% 
+    plot_grid(plotlist= .,
+              nrow = n_row,
+              ncol = n_col)
+
+  save_plot(file.path(immune_fig_dir, 
+                         paste0("umap_", id, "_markers.pdf")),
+          plt, 
+          nrow = n_row,
+          ncol = n_col,
+          base_asp = 1)
+})
+
+
 ```
 
 
+#### Lymphocyte marker phenotypes
 ```{r}
 
-p <- plot_features_split(so, 
-                    "coarse_clusters_gp34_harmony",
-                    "subgroup",
-                    embedding = "umap_harmony",
-                    label_text = TRUE,
-                    label_size = 4,
-                    minimal_theme = TRUE) +
-  labs(x = "UMAP_1",
-       y = "UMAP_2",
-       title = "") +
-  theme(legend.position = "none")
+lymphocyte_markers <- list(
+  general_lymph_markers = c(
+  "CD8A", #cd4 t
+  "CD4", #cd8 t
+  "FOXP3", # Treg
+  "KLRD1" #NK cells
+),
+lymph_cytokines = c(
+  "PRF1", #Perforin
+  "GZMK", #GranzymeK
+  "PDCD1", #PD1
+  "LAG3",# exhaustion marker
+  "IL2",
+  "IFNG"
+  )
+)
 
-p
+lym_cell_types <- c(
+  "Unknown1",
+  "T-cells",
+  "NK-cells",
+  "Treg"
+)
 
-save_plot(file.path(fig_dir, 
-                         paste0("umap_gp34_by_cluster_split.pdf")),
-          p, 
-          base_asp = 1,
-          nrow = 1, 
-          ncol = 3)
+lym_so <- so[, so$new_cell_type_ids_short %in% lym_cell_types]
+  
+umap_lims <- coord_cartesian(xlim = c(-7.5, 2), ylim = c(5.5, 16))
+plts <- imap(lymphocyte_markers,
+            function(mkrs, id) {
+  n <- length(mkrs)
+  n_col <- ceiling(n / 2)
+  n_row <- ceiling(n / 3)
+  plt <- map(mkrs, 
+              ~plot_feature(lym_so, 
+                .x, 
+                embedding = "umap", 
+                minimal_theme = TRUE) + 
+               umap_lims) %>% 
+    plot_grid(plotlist= .,
+              nrow = n_row,
+              ncol = n_col)
+
+  save_plot(file.path(immune_fig_dir, 
+                         paste0("umap_", id, "_markers.pdf")),
+          plt, 
+          nrow = n_row,
+          ncol = n_col,
+          base_asp = 1)
+})
+
+
 ```
+
 
 
 
@@ -881,18 +1049,18 @@ save_plot(file.path(fig_dir,
 
 ```{r}
 res <- so@meta.data %>% 
-  group_by(coarse_clusters_gp34_harmony, UPN) %>% 
+  group_by(new_cell_type_ids, UPN) %>% 
   summarize(n = n()) %>% 
   ungroup() %>% 
   spread(UPN, n, fill = 0L) 
 
 write_csv(res, file.path(tbls_dir,
-                  "gp34_cells_per_cluster_per_sample.csv"))
+                  "immune_cells_per_celltype_per_sample.csv"))
 
 res <- so@meta.data %>% 
-    group_by(coarse_clusters_gp34_harmony, UPN) %>% 
+    group_by(new_cell_type_ids, UPN) %>% 
     summarize(n = n()) %>%
-  group_by(coarse_clusters_gp34_harmony) %>% 
+  group_by(new_cell_type_ids) %>% 
   mutate(total = sum(n),
          percent = 100 * n / total) %>% 
   ungroup() %>% 
@@ -901,34 +1069,20 @@ res <- so@meta.data %>%
 
   
 write_csv(res, file.path(tbls_dir,
-                  "gp34_percent_cells_per_cluster_per_sample.csv"))
+                  "immune_cells_percent_cells_per_celltype_per_sample.csv"))
 
 res <- so@meta.data %>%
-    group_by(coarse_clusters_gp34_harmony, subtype) %>%
-  summarize(n = n()) %>%
-  ungroup() %>%
-  spread(subtype, n, fill = 0L)
-
-
-res
-  write_csv(res, file.path(tbls_dir,
-                  "gp34_subtypes_per_cluster.csv"))
-
-res <- so@meta.data %>%
-    group_by(coarse_clusters_gp34_harmony, subgroup) %>%
+    group_by(new_cell_type_ids, subgroup) %>%
   summarize(n = n()) %>%
   ungroup() %>%
   spread(subgroup, n, fill = 0L)
 
-
 res
-  write_csv(res, file.path(tbls_dir,
-                  "gp34_subgroups_per_cluster.csv"))
+
+write_csv(res, file.path(tbls_dir,
+                  "immune_subgroups_per_cell_type.csv"))
   
 ```
-
-
-
 
 
 

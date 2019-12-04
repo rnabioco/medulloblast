@@ -165,3 +165,46 @@ write_tsv(mkrs,
 write_markers_xlsx(split(mkrs, mkrs$cluster),
                    file.path(xcel_dir, "subgroup_markers_neoplastic.xlsx"))
 ```
+
+
+## Get top PC genes
+
+```{r}
+to_plot <- c("UPN", "coarse_cell_type", "subgroup")
+
+dims_to_plot <- list(
+  c(1,2),
+  c(2,3),
+  c(3,4),
+  c(4,5))
+  
+plts <- list()
+for ( i in seq_along(dims_to_plot)){
+  plts[[i]] <- map(to_plot, ~plot_pca(so, .x, dims =dims_to_plot[[i]])) %>%
+  plot_grid(plotlist = ., nrow = 1, ncol = length(to_plot),
+            rel_widths = c(1.75, 1.5, 1))
+}
+
+names(plts) <- str_c("pc_", 
+                     map_chr(dims_to_plot, ~str_c(.x, collapse = "_")),
+                     ".pdf")
+pc_dir <- file.path(fig_dir, "pcs_all_neoplastic")
+dir.create(pc_dir)
+iwalk(plts,
+  ~save_plot(file.path(pc_dir, .y), .x, nrow = 1, ncol = 3))
+
+
+pc_loadings <- so@reductions$pca@feature.loadings[, 1:20] %>% 
+  as.data.frame() %>% 
+  tibble::rownames_to_column("gene") %>% 
+  arrange(desc(PC_1))
+
+pc_tbl_dir <- file.path(tbls_dir, "pcs", "all_neoplastic")
+dir.create(pc_tbl_dir, recursive = TRUE)
+write_tsv(pc_loadings, file.path(pc_tbl_dir, "pc_loadings.tsv.gz"))
+
+tibble(pc = str_c("PC", 1:length(so@reductions$pca@stdev)), 
+                  stdev = so@reductions$pca@stdev) %>% 
+  write_tsv(file.path(pc_tbl_dir, "pc_variance_explained.tsv"))
+
+```
