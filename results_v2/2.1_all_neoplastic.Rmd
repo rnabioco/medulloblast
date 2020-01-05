@@ -166,6 +166,27 @@ write_markers_xlsx(split(mkrs, mkrs$cluster),
                    file.path(xcel_dir, "subgroup_markers_neoplastic.xlsx"))
 ```
 
+```{r markers of each patient sample}
+so <- readRDS("objects/all_neoplastic.rds")
+
+Idents(so) <- "UPN"
+
+mkrs <- FindAllMarkers(so, only_pos = TRUE)
+
+write_tsv(mkrs, 
+          file.path(mkrs_dir, "upn_markers_neoplastic.tsv"))
+
+write_markers_xlsx(split(mkrs, mkrs$cluster),
+                   file.path(xcel_dir, "upn_markers_neoplastic.xlsx"))
+
+mkrs <- FindAllMarkers(so, only_pos = FALSE)
+
+write_tsv(mkrs, 
+          file.path(mkrs_dir, "upn_markers_neoplastic_pos_and_neg.tsv"))
+
+write_markers_xlsx(split(mkrs, mkrs$cluster),
+                   file.path(xcel_dir, "upn_markers_neoplastic_pos_and_neg.xlsx"))
+```
 
 ## Get top PC genes
 

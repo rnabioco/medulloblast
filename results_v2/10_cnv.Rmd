@@ -1,0 +1,152 @@
+---
+title: "Marker overlap between CNVs"
+author: "Kent Riemondy RBI"
+date: "1/5/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
+source("../R/utils.R")
+library(future)
+
+plan("multicore", workers = 7)
+options(future.globals.maxSize = 2 * 1024 ^ 3)
+
+proj_dir <- here()
+data_dir <- file.path(proj_dir, "data", "cellranger", "results")
+doc_dir <- file.path(proj_dir, "docs")
+
+fig_dir <- "figs"
+mkrs_dir <- "markers"
+tbls_dir <- "tables"
+xcel_dir <- file.path(mkrs_dir, "xlsx")
+walk(c(fig_dir, mkrs_dir, tbls_dir, xcel_dir), 
+     dir.create, 
+     showWarnings = F)
+```
+
+## Strategy
+
+Tumors cells tend to cluster into largely patient specific clusters. However normal cells (i.e. immune and astrocytes) tend to cluster with cells from multiple patients. This argues that the heterogeneity present in each patient is not simply an artifact from xpermental processing, but insteads reflects intrinsic heterogeneity. This hetergeneity could be driven by enviromental factors (tumor location, aggressivness, etc), or tumor genietics. Each patients CNV profile is hetergeneous, suggesting that CNV could driven expression variation, providing an explanation of the hetergeneous expression profiles.
+
+To assess this possibility, inferCNV was run to identify CNVs. The genes in these CNV regions will be compared to markers of each patients. Need to ensure that markers that are down regulated are enriched in CNV regions that are lost and vice versa.
+
+Here is the coding for the inferCNV hmm results:
+0x: complete loss
+0.5x: loss of one copy
+1x: neutral
+1.5x: addition of one copy
+2x: addition of two copies
+3x: essentially a placeholder for >2x copies but modeled as 3x.
+
+
+```{r}
+mkrs <- read_tsv(file.path(mkrs_dir, "upn_markers_neoplastic_pos_and_neg.tsv"),
+                 col_types = c("nnnnncc")) %>% 
+  filter(p_val_adj <0.01)
+
+subgroups <- c("shh", "gp34", "gp3", "gp4")
+names(subgroups) <- c("shh", "gp34", "gp3", "gp4")
+cnv_reports <- map_dfr(subgroups,
+                   ~read_tsv(file.path("inferCNV",
+                                       .x, 
+                                      .x,
+                   "HMM_CNV_predictions.HMMi6.hmm_mode-samples.Pnorm_0.5.pred_cnv_genes.dat")),
+                   .id = "subgroup") 
+
+cnv_reports <- mutate(cnv_reports, 
+                      upn = str_split(cell_group_name,
+                                      "\\.", 
+                                      simplify = T)[, 1] %>%
+                        str_remove("malignant_"),
+                      change = case_when(
+                        subgroup %in% c("gp34", "shh") & state < 1 ~ "loss",
+                        !subgroup %in% c("gp34", "shh") & state < 3 ~ "loss",
+                        subgroup %in% c("gp34", "shh") & state > 1 ~ "gain",
+                        !subgroup %in% c("gp34", "shh") & state > 3 ~ "gain",
+                        TRUE ~ "neutral"
+                                      )) 
+
+upns <- intersect(names(mkr_gene_list), names(cnv_gene_list))
+
+# get list of gnes up and down per UPN
+mkr_gene_list <- split(mkrs, mkrs$cluster) %>% 
+  map(~list(loss = filter(.x, avg_logFC < 0) %>% pull(gene), 
+            gain = filter(.x, avg_logFC > 0) %>% pull(gene) ))
+
+
+cnv_gene_list <- split(cnv_reports, cnv_reports$upn) %>%
+   map(~list(loss = filter(.x, change == "loss") %>% pull(gene), 
+            gain = filter(.x, change == "gain") %>% pull(gene)))
+```
+
+
+```{r}
+
+calc_enrichment <- function(sample_success,
+                            pop_success,
+                            pop_size,
+                            sample_size){
+  x <- sample_success - 1
+  m <- pop_success 
+  n <- pop_size
+  k <- sample_size
+  1-phyper(x, m, n, k)
+}
+
+#get some idea of a good background number
+
+so <- readRDS("objects/all_neoplastic.rds")
+
+n_featues_per_patient <- map_int(upns, 
+                             function(upn){
+                               tmp <- subset(so, cells = rownames(so@meta.data)[so$orig.ident == upn])
+                               sum(Matrix::rowSums(GetAssayData(tmp, "counts")) > 0)
+                             })
+
+gene_pop_size <- median(n_featues_per_patient)
+
+res <- map_dfr(upns, 
+    function(upn){
+      x <- mkr_gene_list[[upn]]$loss
+      y <- cnv_gene_list[[upn]]$loss
+      pop_success_loss <- length(y)
+      sample_success_loss <- length(intersect(x, y))
+      sample_size_loss <- length(x)
+      
+      x <- mkr_gene_list[[upn]]$gain
+      y <- cnv_gene_list[[upn]]$gain
+      pop_success_gain <- length(y)
+      sample_success_gain <- length(intersect(x, y))
+      sample_size_gain <- length(x)
+      
+      sample_success <- sample_success_gain + sample_success_loss
+      pop_success <- pop_success_gain + pop_success_loss
+      sample_size <- sample_size_gain + sample_size_loss
+      
+      pop_size <- gene_pop_size
+      tibble(upn = upn,
+             n_shared = sample_success,
+             n_cnv_genes = pop_success,
+             n_mrks = sample_size,
+             pval = 1- phyper(sample_success - 1,
+                             pop_success, 
+                             pop_size, 
+                             sample_size))
+    }) 
+
+res <- res %>% 
+  mutate(prop_markers_in_cnv = n_shared / n_mrks,
+         prop_genes_in_cnv_in_genome = n_cnv_genes / gene_pop_size,
+         log2_effect_size = log2(prop_markers_in_cnv / prop_genes_in_cnv_in_genome))
+
+res
+```
+
+For most tumors there is a signficant overlap between marker genes and CNV regions. 1202 and 1224 have non-significant overlap. 
+
+
