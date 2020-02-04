@@ -36,9 +36,11 @@ data_dir <- file.path(proj_dir, "data", "cellranger", "results")
 doc_dir <- file.path(proj_dir, "docs")
 
 fig_dir <- "figs"
+qc_figs <- file.path(fig_dir, "qc")
 mkrs_dir <- "markers"
 tbls_dir <- "tables"
-walk(c(fig_dir, mkrs_dir, tbls_dir), dir.create, showWarnings = F)
+walk(c(fig_dir, mkrs_dir, tbls_dir, qc_figs),
+     dir.create, showWarnings = F)
 ```
 
 # Experiment Summary
@@ -48,7 +50,6 @@ walk(c(fig_dir, mkrs_dir, tbls_dir), dir.create, showWarnings = F)
 # read in metadata to parse out directories and sample ids
 mdata <- read_excel(file.path(doc_dir, 
                                    "MED scRNAseq batch and annotations 5.8.19.xlsx")) %>% 
-
   filter(subgroup != "LGG") %>% 
   select(-subgroup)
 
@@ -60,8 +61,8 @@ mdata_updated <- read_excel(file.path(doc_dir,
   filter(subgroup != "LGG") %>% 
   select(UPN, subgroup)
 
-
 mdata <- left_join(mdata_updated, mdata, by = "UPN")
+
 
 sample_paths <- file.path(data_dir,
                           mdata$fq_id,
@@ -69,7 +70,9 @@ sample_paths <- file.path(data_dir,
                           "filtered_feature_bc_matrix")
 
 names(sample_paths) <- str_replace(mdata$UPN, "_", "-")
+```
 
+```{r}
 mat <- Read10X(sample_paths)
 ```
 
@@ -112,6 +115,7 @@ p <- map(metrics,
              x = "") +
         theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
 }) 
+
 ```
 
 ```{r, results ='asis'}
@@ -129,24 +133,6 @@ for(i in seq_along(p)){
 
 ## Rerun preprocessing scaling, PCA, UMAP, etc. 
 
-The dataset alignment approach seems like a poor option for analyzing these tumor samples for the following reason:
-
-1) The normal cells overlap across patients with different tumors suggesting that there isn't a strong global batch effect.
- 
-2) We already know (or can figure out) which cells are likely malignant based on CNV and expression analysis. We also already know which subgroup they reside in.
-
-3) Clustering the aligned results may give us some insights into gene expression patterns, but really all of the tumor cells will be smashed into a single blob making for a very uninformative visualization 
-
-4) the tumors are heterogenous between patients, so merging them together doesn't seem like a useful way to investigate the heterogeneity in gene expression profiles per tumor. 
-
-Instead of using aligning the data will be presented unaligned. Unlike studies in development or cell-type identificaiton studies, very few visualizations will require UMAPs. The workflow for analysis will be as follows:
-
-1) Project data into UMAP and perform coarse clustering to identify malignant, and non-malignant cells types. 
-
-2) Subset the data into differnet catagories for downstream analysis:
-  - 1) normal cells (macrophages, t-cells, b-cells, oligodendrocytes)
-    2) subtype specific datasets (SHH and GROUP3/4)
-    3) 
     
 ```{r create_seurat, message = F, results = 'hide', warning = F}
 
@@ -158,6 +144,9 @@ so <- CreateSeuratObject(
   names.field = 1
 )
 
+rm(mat)
+gc()
+
 # fix 966-2 to 966_2 
 so@meta.data$orig.ident <- str_replace(so@meta.data$orig.ident,
                                          "966-2", 
@@ -167,10 +156,26 @@ so <- PercentageFeatureSet(so,
                              pattern = "^MT-", 
                              col.name = "percent.mt")
 
-so@meta.data <- so@meta.data %>% 
-  tibble::rownames_to_column("cell") %>% 
+so@meta.data <- get_metadata(so, embedding = NULL) %>% 
   left_join(mdata, by = c("orig.ident" = "UPN")) %>% 
   mutate(UPN = orig.ident) %>% 
+  as.data.frame() %>% 
+  tibble::column_to_rownames("cell")
+
+# Fix 934 and 943, which are the same
+# and annotate that 966_2 is a recurrance
+so@meta.data <- get_metadata(so, embedding = NULL) %>% 
+  mutate(additional_info = case_when(
+    UPN == "943" ~ "repeated_sample",
+    UPN == "966_2" ~ "recurrance",
+    UPN == "966" ~ "primary",
+    TRUE ~ NA_character_),
+         UPN = ifelse(UPN == "943",
+                      "934",
+                      UPN),
+         UPN = ifelse(UPN == "966_2",
+                      "966",
+                      UPN)) %>% 
   as.data.frame() %>% 
   tibble::column_to_rownames("cell")
 
@@ -182,33 +187,47 @@ saveRDS(so, file.path("objects", "unfiltered.rds"))
 ### Percent Mitochondrial UMIs 
 
 ```{r}
-plot_violin(so@meta.data, 
+p <- plot_violin(so@meta.data, 
             "orig.ident",
             "percent.mt",
             .fill = "subgroup") +
-  labs(x = "", y = "Percent UMIs from Mitochondria")
+  labs(x = "", y = "Percent UMIs from Mitochondria") + 
+ geom_hline(aes(yintercept = 30), linetype = "dashed")
+
+save_plot(file.path(qc_figs, "prop_mito.pdf"),
+          p, base_asp = 1.75)
+p
 ```
 
 
 ### # of genes detected 
 
 ```{r}
-plot_violin(so@meta.data,
+p <- plot_violin(so@meta.data,
             "orig.ident", 
             "nFeature_RNA",
             .fill = "subgroup") +
   labs(x = "", y = "# of genes per cell")
+
+save_plot(file.path(qc_figs, "ngene.pdf"),
+          p, base_asp = 1.75)
+p
 ```
 
 
 ### # of UMIs detected
 
 ```{r}
-plot_violin(so@meta.data, 
+p <- plot_violin(so@meta.data, 
             "orig.ident",
             "nCount_RNA", 
             .fill = "subgroup") +
-  labs(x = "", y = "# of UMIs") 
+  labs(x = "", y = "# of UMIs") + 
+ geom_hline(aes(yintercept = 40000), linetype = "dashed")
+
+save_plot(file.path(qc_figs, "numi.pdf"),
+          p, base_asp = 1.75)
+p
 ```
 
 ### Table of mitochondrial proportions per sample
@@ -238,7 +257,15 @@ for(i in seq_along(per_sample)){
         scale_color_manual(values = .col)
 }
 
-plot_grid(plotlist= p, nrow = 5, ncol = 7)
+plt <- plot_grid(plotlist= p, base_asp = 1, nrow = 6, ncol = 6)
+
+
+save_plot(file.path(qc_figs, "umi_v_prop_mito.pdf"),
+          plt,
+          nrow = 6,
+          ncol = 6)
+
+plt
 ```
 
 ```{r, results ='asis'}
@@ -259,8 +286,6 @@ for(i in seq_along(per_sample)){
 
 Suggest removing cells with > 30% mitochondrial UMIs, > 40K UMIs. 
 
-Removing WNT sample from dataset as not enough samples/cells for a rigorous analysis. 
-
 Removing sample 1008 as it only has ~45 malignant cells and is dominated by immune cells
 
 ```{r}
@@ -269,7 +294,6 @@ so <- readRDS(file.path("objects", "unfiltered.rds"))
 so <- subset(so, subset = percent.mt < 30)
 so <- subset(so, subset = nCount_RNA < 40000)
 so <- subset(so, subset = nCount_RNA > 500)
-so <- subset(so, subset = subgroup != "WNT")
 so <- subset(so, subset = UPN != "1008")
 ```
 
@@ -278,9 +302,6 @@ Annotate samples and assign colors to each sample.
 
 
 ```{r}
-
-so$UPN[so$UPN =="966_2"] <- "966"
-
 annots <- so@meta.data %>% 
   select(UPN, subgroup) %>% 
   unique() %>%
@@ -290,7 +311,8 @@ subgroup_order <- c(
   "SHH",
   "GP3",
   "GP3/4",
-  "GP4"
+  "GP4",
+  "WNT"
 )
 
 annots <- mutate(annots, subgroup = factor(subgroup, levels = subgroup_order))
@@ -311,7 +333,6 @@ col_pal <- get_distinct_cols(annots$subgroup)
 ## Normalize and embed into 2D with UMAP
 
 ```{r}
-
 so <- NormalizeData(so)
 
 so <- FindVariableFeatures(
@@ -322,21 +343,20 @@ so <- FindVariableFeatures(
 )
 
 so <- ScaleData(so, 
-                  vars.to.regress = c("percent.mt", "nCount_RNA"), 
+                  vars.to.regress = c("percent.mt"), 
                   verbose = TRUE)
 
 so <- RunPCA(so, 
-             npcs = 100, 
+             npcs = 50, 
              verbose = FALSE)
 
-ElbowPlot(so, ndims = 100)
+ElbowPlot(so, ndims = 50)
 
 # make graphs and use graphs for UMAP
 so <- FindNeighbors(so, 
-                      reduction = "pca", 
-                      dims = 1:50, 
-                      n.neighbors = 50L)
-
+                    reduction = "pca", 
+                    dims = 1:50, 
+                    n.neighbors = 50L)
 
 so <- RunUMAP(so, 
               graph = "RNA_snn", 
@@ -352,43 +372,53 @@ Idents(so) <- "coarse_clusters"
 ```
 
 ```{r}
-
-plot_umap(so, "subgroup", .col = palette_OkabeIto)
+plot_umap(so, "subgroup", 
+          .col = scbp:::palette_OkabeIto, 
+          label_text = TRUE, 
+          label_col = "black",
+          sorted = "random")
 plot_umap(so, "coarse_clusters", label_text = TRUE, label_col = "black")
-plot_umap(so, "UPN", label_text = TRUE, label_col = "black")
+plot_umap(so, "UPN", 
+          label_text = TRUE, 
+          label_col = "black", 
+          sorted = "random")
 ```
 
 
-```{r}
-saveRDS(so, file.path("objects", "so.rds"))
-```
 
 ## markers 
 
 ```{r}
-mkrs <- FindAllMarkers(so, only.pos = TRUE)
+library(presto)
+mkrs <- wilcoxauc(so, "coarse_clusters")
 
-write_tsv(mkrs, 
-          file.path(mkrs_dir, "coarse_cluster_markers_all_data.tsv"))
+filter(mkrs, 
+       logFC > 0, padj < 0.05) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC)) %>% 
+write_tsv(file.path(mkrs_dir, "coarse_cluster_markers_all_data.tsv"))
+
+filter(mkrs, 
+       logFC > 0, padj < 0.05) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC)) %>% 
+  ungroup() %>% 
+  split(., .$group) %>% 
+scbp::write_markers_xlsx(.,
+                   file.path(xcel_dir, "coarse_cluster_markers_all_data.xlsx"))
+
 ```
-
-
-
-```{r}
-so <- readRDS(file.path("objects", "so.rds"))
-mkrs <- read_tsv(file.path(mkrs_dir, "coarse_cluster_markers_all_data.tsv"))
-
-topx <- mkrs %>% 
-  group_by(cluster) %>% 
-  top_n(10, avg_logFC) 
-```
-
-
 
 ```{r, fig.width = 20, fig.height= 20}
+topx <- mkrs %>% 
+  filter(logFC > 0, padj < 0.05) %>% 
+  mutate(group = as.factor(as.integer(group))) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC)) %>% 
+  slice(1:10)
 
 p <- DotPlot(so, 
-        features = unique(topx$gene),
+        features = unique(topx$feature),
         group.by = "coarse_clusters") +
   coord_flip() +
   labs(x = "Cluster",
@@ -403,21 +433,21 @@ save_plot(file.path(fig_dir,
 
 
 ```{r}
+so <- calc_diversity(so, "UPN", "coarse_clusters")
 
-cdiv <- so@meta.data %>% 
-  rownames_to_column("cell") %>% 
-  mutate(n_samples = length(unique(UPN))) %>% 
-  group_by(coarse_clusters) %>% 
-  mutate(cdiversity = length(unique(UPN)) / n_samples,
-         csamples = length(unique(UPN))) %>% 
-  ungroup() %>% 
-  select(cell, cdiversity, csamples) %>% 
-  as.data.frame(.) %>% 
-  column_to_rownames("cell")
+so$cdiversity <- so$entropy
+so$entropy <- NULL
 
-so <- AddMetaData(so, cdiv)
+p <- plot_umap(so, "cdiversity", legend_title = "cluster\ndiversity")
 
-plot_umap(so, "cdiversity")
+save_plot(file.path(qc_figs, "cluster_diversity.pdf"), p, base_asp = 1.2, )
+```
+
+```{r}
+plot_umap(so, "coarse_clusters")
+```
+```{r}
+plot_umap(so, "UPN")
 ```
 
 
@@ -444,9 +474,23 @@ new_ids <- c(
  "16" = "malignant"
  )
 
+cids <- as.numeric(as.character(so$coarse_clusters)) %>% unique() %>% sort()
+
+new_ids <- c(
+  "10" = "lymphocytes",
+  "0" = "macrophage_monocytes",
+  "14" ="oligodendrocytes_astrocytes_other",
+  "18" = "macrophage_monocytes"
+)
+others <- setdiff(cids, names(new_ids))
+other_ids <- rep("malignant", length(others))
+names(other_ids) <- as.character(others)
+
+new_ids <- c(new_ids, other_ids)
+
 so$coarse_cell_type <- new_ids[as.character(so$coarse_clusters)]
 
-plot_umap(so, "coarse_cell_type", .cols = palette_OkabeIto)
+plot_umap(so, "coarse_cell_type", .cols = scbp:::palette_OkabeIto)
 ```
 
 
@@ -478,38 +522,6 @@ plts
 
 
 ```
-
-## Fix 966 annotation
-
-the two samples from 966 are not replicates, the first is a sample from presentation. The second is from a recurrance sample. 
-
-```{r}
-so$UPN <- so$orig.ident
-
-annots <- so@meta.data %>%
-  select(UPN, subgroup) %>%
-  unique() %>%
-  arrange(subgroup)
-
-subgroup_order <- c(
-  "SHH",
-  "GP3",
-  "GP3/4",
-  "GP4"
-)
-
-annots <- mutate(annots,
-                 subgroup = factor(subgroup, levels = subgroup_order))
-
-annots <- annots %>% arrange(subgroup, as.numeric(UPN))
-
-sample_order <- annots$UPN
-
-so@meta.data$UPN <- factor(so@meta.data$UPN, levels = sample_order)
-
-```
-
-
 
 ## Write out data
 

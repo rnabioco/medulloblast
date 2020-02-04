@@ -39,20 +39,36 @@ so <- readRDS(file.path("objects", "so.rds"))
 ```{r}
 p <- plot_umap(so, "subgroup", .cols = palette_OkabeIto) 
 
+n_cells <- ncol(so) %>% scales::comma() %>% str_c(., " cells")
+p <- plot_umap(so, "subgroup", 
+          .col = palette_OkabeIto, 
+          label_text = TRUE,
+          legend_title = "",
+          label_col = "black",
+          sorted = "random") +
+  annotate(x = 17,
+           y = -18, 
+           geom = "text",
+           label = n_cells)
+  
 save_plot(file.path(fig_dir, "umap_by_subgroup.pdf"),
           p, 
           base_asp = 1.4)
+
+p
 ```
 
 ### UPN
 
 ```{r}
-p <- plot_umap(so, "UPN") + 
+p <- plot_umap(so, "UPN", sorted = "random", legend_title = "") + 
   theme( legend.text = element_text(size = 8))
 
 save_plot(file.path(fig_dir, "umap_by_UPN.pdf"),
           p, 
           base_asp = 1.4)
+
+p
 ```
 
 ### coarse clusters
@@ -72,7 +88,7 @@ save_plot(file.path(fig_dir, "umap_by_cluster.pdf"),
 coarse_cell_type_pretty_id <- c("Neoplastic",
                                "Lymphocytes",
                                "Glia",
-                               "Monocytes")
+                               "Myeloid")
 
 names(coarse_cell_type_pretty_id) <- c("malignant",
                                "lymphocytes",
@@ -80,9 +96,12 @@ names(coarse_cell_type_pretty_id) <- c("malignant",
                                "macrophage_monocytes")
 
 p <- plot_umap(so, "coarse_cell_type") +
-  scale_color_manual(values = palette_OkabeIto, 
+  scale_color_manual(name = "",
+                     values = palette_OkabeIto, 
                       breaks = names(coarse_cell_type_pretty_id), 
                       labels = coarse_cell_type_pretty_id)
+
+p 
 
 save_plot(file.path(fig_dir, "umap_by_coarse_cell_type.pdf"),
           p, 
@@ -104,6 +123,16 @@ per_patient <- sc_mdata %>%
             prop_cell_type = n / unique(n_cells),
             subgroup = unique(subgroup))
 
+cell_summary <- sc_mdata %>% 
+  mutate(simple_id = coarse_cell_type_pretty_id[coarse_cell_type]) %>% 
+  group_by(UPN) %>%
+  mutate(n_cells = n()) %>% 
+  ungroup() %>% 
+  select(UPN, subgroup, n_cells) %>% 
+  mutate(n_cells = str_c("n = ", n_cells),
+         n_cells = str_pad(n_cells, max(nchar(n_cells)), "right")) %>% 
+  unique()
+
 p <- ggplot(per_patient, 
        aes(UPN, prop_cell_type)) +
   geom_col(aes(fill = simple_id)) +
@@ -112,9 +141,13 @@ p <- ggplot(per_patient,
   scale_fill_manual(values = rev(palette_OkabeIto[1:4]), 
                     name = "") + 
   facet_grid(~subgroup, scales = "free_x", space = "free_x") +
-  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
         legend.position = "top",
-        strip.background = element_rect(fill = "white"))
+        strip.background = element_rect(fill = "white")) +
+  geom_text(data = cell_summary, 
+            aes(x = UPN, y = 0.15,
+                label = n_cells),
+            angle = 90)
 p
 
 save_plot(file.path(fig_dir, "cell_types_per_tumor.pdf"), 
@@ -139,26 +172,33 @@ run on server per subgroup. Consider replotting heatmaps with better visualizati
 ```{r}
 so <- readRDS(file.path("objects", "all_neoplastic.rds"))
 
-p <- plot_umap(so, "subgroup", .cols = palette_OkabeIto) 
+n_cells <- ncol(so) %>% scales::comma() %>% str_c(., " cells")
+p <- plot_umap(so, "subgroup", .cols = palette_OkabeIto,
+               legend_title = "") + 
+   annotate(x = 18,
+           y = -18, 
+           geom = "text",
+           label = n_cells)
 p
 save_plot(file.path(fig_dir, "umap_neoplastic_by_subgroup.pdf"),
           p, 
           base_asp = 1.2)
 
-
 subtype_pal <- c(
   brewer.pal(4, "Blues")[2:4],
   brewer.pal(4, "Greens")[2:4],
-  brewer.pal(4, "Reds")[c(2,4)]
+  brewer.pal(4, "Reds")[2:4],
+  brewer.pal(4, "Purples")[c(2,4)]
 )
-p <- plot_umap(so, "subtype", .cols = subtype_pal) 
+p <- plot_umap(so, "subtype", .cols = subtype_pal,
+               legend_title = "") 
 p
 save_plot(file.path(fig_dir, "umap_neoplastic_by_subtype.pdf"),
           p, 
           base_asp = 1.5)
 
 
-p <- plot_umap(so, "UPN") +
+p <- plot_umap(so, "UPN", legend_title = "") +
   theme( legend.text = element_text(size = 8))
 
 save_plot(file.path(fig_dir, "umap_neoplastic_by_UPN.pdf"),
@@ -169,7 +209,7 @@ save_plot(file.path(fig_dir, "umap_neoplastic_by_UPN.pdf"),
 # SHH tumors
 
 ```{r}
-so <- readRDS(file.path("objects", "shh.rds"))
+so <- readRDS(file.path("objects", "shh2.rds"))
 ```
 
 ### Various genes in SHH
@@ -184,7 +224,7 @@ famous_genes <- c(
 )
 
 plts <- map(famous_genes,
-    ~plot_umap(so, .x, minimal_theme = TRUE))
+    ~plot_harmony(so, .x, minimal_theme = TRUE))
 
 names(plts) <- famous_genes
 
@@ -203,41 +243,40 @@ iwalk(plts,
 Using alignment techniques generates marker gene lists that are prettty similar to those seen by NMF/scHPF. Also produces easier to digest visualizations via UMAP rather than heatmaps.
 
 ```{r}
-so <- readRDS(file.path("objects", "shh.rds"))
-
-p <- plot_feature(so, 
+p <- plot_harmony(so, 
              "coarse_clusters_shh_harmony", 
-             embedding = "umap_harmony", 
              label_color = "black", 
-             label_text = TRUE)
+             label_text = TRUE,
+             legend_title = "")
 
 save_plot(file.path(fig_dir, "umap_shh_by_clusters.pdf"),
           p, 
           base_asp = 1.4)
 
-p <- plot_feature(so, 
+p <- plot_harmony(so, 
              "UPN", 
-             embedding = "umap_harmony")
+             legend_title = "")
 
 save_plot(file.path(fig_dir, "umap_shh_by_upn.pdf"),
           p, 
           base_asp = 1.4)
 
-p <- plot_feature(so, 
+p <- plot_harmony(so, 
              "Phase", 
-             embedding = "umap_harmony",
-             .cols = palette_OkabeIto)
+             .cols = palette_OkabeIto,
+             legend_title = "")
 
 save_plot(file.path(fig_dir, "umap_shh_by_cc_phase.pdf"),
           p, 
           base_asp = 1.4)
 
-p <- plot_feature(so, 
+p <- plot_harmony(so, 
              "subtype", 
-             embedding = "umap_harmony",
-             .cols = palette_OkabeIto) +
+             .cols = palette_OkabeIto,
+             legend_title = "") +
   scale_color_manual(values = palette_OkabeIto, 
-                     drop = TRUE)
+                     drop = TRUE,
+                     name = "")
 
 save_plot(file.path(fig_dir, "umap_shh_by_subtype.pdf"),
           p, 
@@ -251,12 +290,12 @@ save_plot(file.path(fig_dir, "umap_shh_by_subtype.pdf"),
 mkrs <- read_tsv(file.path(mkrs_dir, "harmony_markers_shh.tsv"))
 
 topx <- mkrs %>% 
-  arrange(p_val_adj) %>% 
-  group_by(cluster) %>% 
+  arrange(padj) %>% 
+  group_by(group) %>% 
   slice(1:10) 
 
 p <- DotPlot(so, 
-        features = unique(topx$gene),
+        features = unique(topx$feature),
         cols = "Spectral",
         group.by = "coarse_clusters_shh_harmony") +
   coord_flip() +
@@ -291,11 +330,11 @@ shh_mps <- c(
 names(shh_mps) <- paste0("Hovestadt_et_al_", shh_mps)
 
 plts <- imap(shh_mps,
-            ~plot_feature(so, 
+            ~plot_harmony(so, 
                .x, 
-               embedding = "umap_harmony", 
                show_negative = TRUE,
-               minimal_theme = TRUE) + 
+               minimal_theme = TRUE
+               ) + 
               labs(title = .y))
 
 out_ids <- names(plts) %>% 
@@ -341,8 +380,37 @@ iwalk(plts,
 ```
 
 
+### plot some CNV genes
 
 
+
+```{r}
+cnv_mkrs <- c(
+  "MYCN",
+  "TERT",
+  "CDKN2A"
+)
+
+plts <- map(cnv_mkrs,
+            ~plot_feature(so, 
+               .x, 
+               embedding = "umap", 
+               minimal_theme = TRUE))
+
+p <- plot_umap(so, 
+               "UPN", 
+               minimal_theme = TRUE,
+               label_text = TRUE)
+
+
+plts <- c(list(p), plts)
+names(plts) <- c("UPN", cnv_mkrs)
+iwalk(plts, 
+    ~save_plot(file.path(fig_dir, 
+                         paste0("umap_shh_by_", .y, ".pdf")),
+          .x, 
+          base_asp = 1))
+```
 
 ### cell count tables 
 
@@ -400,9 +468,12 @@ res
                   "percent_cells_per_cluster_per_sample.csv"))
 
 ```
+
+
 # GP3 and GP 4 tumors
 
 ### Various marker genes for Gp3 and Gp4
+
 
 
 ```{r}
@@ -433,13 +504,14 @@ iwalk(plts,
 Using alignment techniques generates marker gene lists that are prettty similar to those seen by NMF/scHPF. Also produces easier to digest visualizations via UMAP rather than heatmaps.
 
 ```{r}
-so <- readRDS(file.path("objects", "gp34.rds"))
+so <- readRDS(file.path("objects", "gp34_2.rds"))
 
-p <- plot_feature(so, 
+p <- plot_harmony(so, 
              "coarse_clusters_gp34_harmony", 
-             embedding = "umap_harmony", 
              label_color = "black", 
-             label_text = TRUE) +
+             label_text = TRUE,
+             legend_title = "",
+             sorted = "random") +
   labs(x = "UMAP 1",
        y = "UMAP 2")
 
@@ -447,9 +519,10 @@ save_plot(file.path(fig_dir, "umap_gp34_by_clusters.pdf"),
           p, 
           base_asp = 1.4)
 
-p <- plot_feature(so, 
+p <- plot_harmony(so, 
              "UPN", 
-             embedding = "umap_harmony") +
+             legend_title = "",
+             sorted = "random") +
   labs(x = "UMAP 1",
        y = "UMAP 2")
 
@@ -457,10 +530,11 @@ save_plot(file.path(fig_dir, "umap_gp34_by_upn.pdf"),
           p, 
           base_asp = 1.4)
 
-p <- plot_feature(so, 
+p <- plot_harmony(so, 
              "Phase", 
-             embedding = "umap_harmony",
-             .cols = palette_OkabeIto) +
+             .cols = palette_OkabeIto,
+              legend_title = "",
+             sorted = "random") +
   labs(x = "UMAP 1",
        y = "UMAP 2")
 
@@ -468,10 +542,11 @@ save_plot(file.path(fig_dir, "umap_gp34_by_cc_phase.pdf"),
           p, 
           base_asp = 1.4)
 
-p <- plot_feature(so, 
+p <- plot_harmony(so, 
              "subtype", 
-             embedding = "umap_harmony",
-             .cols = palette_OkabeIto) +
+             .cols = palette_OkabeIto,
+              legend_title = "",
+             sorted = "random") +
   scale_color_manual(values = palette_OkabeIto, 
                      drop = TRUE) +
   labs(x = "UMAP 1",
@@ -489,12 +564,12 @@ save_plot(file.path(fig_dir, "umap_gp34_by_subtype.pdf"),
 mkrs <- read_tsv(file.path(mkrs_dir, "harmony_markers_gp34.tsv"))
 
 topx <- mkrs %>% 
-  arrange(p_val_adj) %>% 
-  group_by(cluster) %>% 
+  arrange(padj) %>% 
+  group_by(group) %>% 
   slice(1:10) 
 
 p <- DotPlot(so, 
-        features = unique(topx$gene),
+        features = unique(topx$feature),
         cols = "Spectral",
         group.by = "coarse_clusters_gp34_harmony") +
   coord_flip() +
@@ -526,9 +601,8 @@ mp_ids <- c(
 names(mp_ids) <- paste0("Hovestadt_et_al_", mp_ids)
 
 plts <- imap(mp_ids,
-            ~plot_feature(so, 
+            ~plot_harmony(so, 
                .x, 
-               embedding = "umap_harmony", 
                show_negative = TRUE,
                minimal_theme = TRUE) + 
               labs(title = .y))
@@ -542,7 +616,7 @@ walk2(plts, out_ids,
     ~save_plot(file.path(fig_dir, 
                          paste0("umap_gp34_by_", .y, ".pdf")),
           .x, 
-          base_asp = 1.4))
+          base_asp = 1))
 
 ```
 
@@ -558,20 +632,20 @@ famous_genes <- c(
   "NRL",
   "TOP2A",
   "CRX",
-  "ROM1"
+  "ROM1",
+  "GRIA2"
 )
 
 plts <- map(famous_genes,
-            ~plot_feature(so, 
+            ~plot_harmony(so, 
                .x, 
-               embedding = "umap_harmony", 
                minimal_theme = TRUE) )
 names(plts) <- famous_genes
 iwalk(plts, 
     ~save_plot(file.path(fig_dir, 
                          paste0("umap_gp34_by_", .y, ".pdf")),
           .x, 
-          base_asp = 1.4))
+          base_asp = 1))
 ```
 
 
@@ -580,7 +654,7 @@ iwalk(plts,
 p <- plot_features_split(so, 
                     "coarse_clusters_gp34_harmony",
                     "subgroup",
-                    embedding = "umap_harmony",
+                    embedding = "harmony_umap",
                     label_text = TRUE,
                     label_size = 4,
                     minimal_theme = TRUE) +
@@ -597,6 +671,7 @@ save_plot(file.path(fig_dir,
           base_asp = 1,
           nrow = 1, 
           ncol = 3)
+
 ```
 
 
@@ -678,7 +753,7 @@ save_plot(file.path(immune_fig_dir, "umap_by_clusters.pdf"),
           base_asp = 1.0)
 
 p <- plot_umap(so, 
-             "UPN")
+             "UPN", legend_title = "", sorted = "random")
 
 save_plot(file.path(immune_fig_dir, "umap_by_upn.pdf"),
           p, 
@@ -785,6 +860,62 @@ save_plot(file.path(immune_fig_dir,
           p,
           base_asp = 2,
           base_height = 6)
+
+```
+
+
+```{r}
+to_plot <- c(
+  "Activated-Microglia",
+  "Dendritic-cell-like",
+  "Microglia",
+  "Neutrophil"
+)
+so_sub <- subset(so, subset = new_cell_type_ids_short %in% to_plot)
+p <- plot_features_split(so_sub, "new_cell_type_ids", "subgroup",
+                         legend_title = "") +
+  guides(color = guide_legend(nrow = 3, override.aes = list(size = 6))) + 
+  theme(legend.position = "top") + 
+  coord_cartesian(xlim = c(-7, 7), ylim = c(-14, 0))
+
+p
+save_plot(file.path(immune_fig_dir,
+                    "umap_by_myleoid_cell_types_split_by_subgroup.pdf"),
+          p, base_asp = 1,
+          nrow = 2, 
+          ncol = 2)
+
+
+lym_cell_types <- c(
+  "Unknown1",
+  "T-cells",
+  "NK-cells",
+  "Treg"
+)
+
+so_sub <- so[, so$new_cell_type_ids_short %in% lym_cell_types]
+
+p <- plot_features_split(so_sub, "new_cell_type_ids", "subgroup",
+                         legend_title = "") +
+  guides(color = guide_legend(nrow = 2, override.aes = list(size = 6))) + 
+  theme(legend.position = "top") + 
+  coord_cartesian(xlim = c(-7.5, 2), ylim = c(5.5, 16))
+
+p
+save_plot(file.path(immune_fig_dir,
+                    "umap_by_t_cell_types_split_by_subgroup.pdf"),
+          p, base_asp = 1,
+          nrow = 2, 
+          ncol = 2)
+
+genes_to_plot <- c(
+  "GZMK", #GranzymeK
+  "PDCD1", #PD1
+  "LAG3",# exhaustion marker
+  "IL2",
+  "IFNG"
+  )
+)
 
 ```
 

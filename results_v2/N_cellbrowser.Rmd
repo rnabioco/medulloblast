@@ -13,7 +13,8 @@ knitr::opts_chunk$set(echo = TRUE)
 Format seurats object into a UCSC cellbrowser. Note requires UCSC (`cellbrowser python package`[ https://cellbrowser.readthedocs.io/index.html]) 
 
 ```{r}
-source("../R/utils.R")
+#source("../R/utils.R")
+library(scbp)
 library(tidyverse)
 #dir.create("cellbrowser")
 
@@ -164,6 +165,86 @@ make_cellbrowser(so,
 ```
 
 
+# Gp3  subgroup
+
+
+```{r}
+so <- readRDS(file.path("objects", "gp3_only.rds"))
+
+cols_to_keep <- c(
+  `genes per cell` = "nFeature_RNA",
+  `UMIs per cell` = "nCount_RNA",
+  `percent of UMIs as mitochondria` = "percent.mt",
+  `clusters_unaligned` = "coarse_clusters_gp3",
+  `clusters_aligned` = "coarse_clusters_gp3_harmony",
+  `subgroup` = "subgroup",
+  `subtype` = "subtype",
+  `Dx` = "Dx",
+  `UPN` = "UPN",
+   `cell cycle phase` = "Phase")
+  # "Northcutt_MetaProgam_A" = "Group 3/4-A_metafactor1",
+  # "Northcutt_MetaProgam_B" = "Group 3/4-B_metafactor1",
+  # "Northcutt_MetaProgam_C" = "Group 3/4-C_metafactor1")
+
+
+scbp::make_cellbrowser(so, 
+                 column_list = cols_to_keep,
+                 secondary_cols = 
+                   c("subtype",
+                     "cell_type",
+                     "subgroup",
+                     "cell cycle phase"), 
+                 project = "medulloblastoma_neoplastic_gp3_only",
+                 outdir = cb_outdir,
+                 marker_file = "markers/harmony_markers_gp3_only.tsv",
+                 ident = "clusters_aligned",
+                 embeddings = def_embeddings(so),
+                 skip_expr_matrix = TRUE
+)
+```
+
+
+
+# Gp4 subgroup
+
+
+```{r}
+so <- readRDS(file.path("objects", "gp4_only.rds"))
+
+cols_to_keep <- c(
+  `genes per cell` = "nFeature_RNA",
+  `UMIs per cell` = "nCount_RNA",
+  `percent of UMIs as mitochondria` = "percent.mt",
+  `clusters_unaligned` = "coarse_clusters_gp4",
+  `clusters_aligned` = "coarse_clusters_gp4_harmony",
+  `subgroup` = "subgroup",
+  `subtype` = "subtype",
+  `Dx` = "Dx",
+  `UPN` = "UPN",
+   `cell cycle phase` = "Phase")
+  # "Northcutt_MetaProgam_A" = "Group 3/4-A_metafactor1",
+  # "Northcutt_MetaProgam_B" = "Group 3/4-B_metafactor1",
+  # "Northcutt_MetaProgam_C" = "Group 3/4-C_metafactor1")
+
+
+scbp::make_cellbrowser(so, 
+                 column_list = cols_to_keep,
+                 secondary_cols = 
+                   c("subtype",
+                     "cell_type",
+                     "subgroup",
+                     "cell cycle phase"), 
+                 project = "medulloblastoma_neoplastic_gp4_only",
+                 outdir = cb_outdir,
+                 marker_file = "markers/harmony_markers_gp4_only.tsv",
+                 ident = "clusters_aligned",
+                 embeddings = def_embeddings(so),
+                 skip_expr_matrix = TRUE
+)
+```
+
+
+
 # Immune populations
 
 
@@ -294,12 +375,15 @@ datasets <- c(
   "medulloblastoma_neoplastic_gp34/cellbrowser.conf",
   "medulloblastoma_gp34_mouse_models/cellbrowser.conf",
   "medulloblastoma_shh_mouse_model/cellbrowser.conf",
-  "medulloblastoma_immune/cellbrowser.conf"
+  "medulloblastoma_immune/cellbrowser.conf",
+  "medulloblastoma_neoplastic_gp3_only/cellbrowser.conf",
+  "medulloblastoma_neoplastic_gp4_only/cellbrowser.conf"
 )
 
 datasets <- file.path(cb_outdir, datasets)
 
-build_cellbrowser(datasets, outdir = file.path(cb_outdir, "mblast"))
+scbp::build_cellbrowser(datasets, 
+                        outdir = file.path(cb_outdir, "mblast"))
 
 ```
 

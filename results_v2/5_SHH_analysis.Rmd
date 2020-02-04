@@ -49,7 +49,7 @@ so <- FindVariableFeatures(
 )
 
 so <- ScaleData(so, features = VariableFeatures(so), 
-                  vars.to.regress = c("percent.mt", "nCount_RNA"), 
+                  vars.to.regress = "percent.mt", 
                   verbose = TRUE)
 
 so <- RunPCA(so, 
@@ -97,10 +97,10 @@ so <- RunUMAP(so,
               dims = 1:40, 
               min.dist = 0.2,
               n.neighbors = 30L,
-              reduction.name = "umap_harmony",
+              reduction.name = "harmony_umap",
               reduction.key = "UMAP_Harmony_")
 
-plot_feature(so, "UPN", embedding = "umap_harmony")
+plot_harmony(so, "UPN")
 plot_umap(so, "UPN")
 plot_umap(so, "subtype")
 
@@ -108,51 +108,59 @@ so <- FindNeighbors(so, reduction = "harmony", dims = 1:40)
 so <- FindClusters(so, resolution = 0.3)
 
 
-
-
 so$coarse_clusters_shh_harmony <- so$seurat_clusters
 Idents(so) <- "coarse_clusters_shh_harmony"
-plot_feature(so, "coarse_clusters_shh_harmony", embedding = "umap_harmony")
+plot_harmony(so, "coarse_clusters_shh_harmony")
 ```
 
 ```{r}
-saveRDS(so, "objects/shh.rds")
+saveRDS(so, "objects/shh2.rds")
+```
+
+```{r}
+so <- readRDS("objects/shh2.rds")
 ```
 ## Markers
 
 ```{r markers of each subgroup}
-so <- readRDS("objects/shh.rds")
+library(presto)
+mkrs <- wilcoxauc(so, "coarse_clusters_shh_harmony")
 
-Idents(so) <- "coarse_clusters_shh_harmony"
+mkrs <- filter(mkrs, logFC > 0, padj < 0.05) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC), .by_group = TRUE)
 
-mkrs <- FindAllMarkers(so, only.pos = TRUE)
+mkrs %>% 
+  write_tsv(file.path(mkrs_dir, "harmony_markers_shh.tsv"))
 
-write_tsv(mkrs, 
-          file.path(mkrs_dir, "harmony_markers_shh.tsv"))
-
-write_markers_xlsx(split(mkrs, mkrs$cluster),
+mkrs %>% 
+  ungroup() %>% 
+  split(., .$group) %>% 
+  write_markers_xlsx(.,
                    file.path(xcel_dir, "harmony_markers_shh.xlsx"))
 ```
 
 ## Go Terms
 
-
 ```{r}
 library(gprofiler2)
 library(ggrepel)
+# Use top 500 markers 
 mkrs <- read_tsv(file.path(mkrs_dir, 
                     "harmony_markers_shh.tsv")) %>% 
-  filter( p_val_adj < 0.05)
+  filter( padj < 0.05) %>% 
+  group_by(group) %>% 
+  slice(1:500)
 
-mkrs_split <- split(mkrs, mkrs$cluster) %>% 
-  map(~pull(.x, gene))
+mkrs_split <- split(mkrs, mkrs$group) %>% 
+  map(~pull(.x, feature))
+
 go_res <- gost(mkrs_split, 
                ordered_query = TRUE,
                sources = c("GO", 
                           "KEGG", 
                           "REAC", 
                           "TF"))
-
 
 go_res[["result"]] %>% 
   mutate(parents = unlist(map(parents, ~str_c(.x, collapse = ",")))) %>% 
@@ -171,16 +179,17 @@ go_res[["result"]] %>%
 ```{r}
 topx <- read_tsv(file.path(mkrs_dir, 
                     "harmony_markers_shh.tsv")) %>% 
-  filter(p_val_adj < 0.05) %>% 
-  group_by(cluster) %>% 
-  arrange(p_val_adj, .by_group = TRUE) %>% 
+  filter(padj < 0.05) %>% 
+   mutate(group = as.factor(as.integer(group))) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC), .by_group = TRUE) %>% 
   slice(1:10)
 
 so <- ScaleData(so, features = rownames(so))
 
 p <- DoHeatmap(so, 
                group.colors = discrete_palette_default,
-               features = unique(topx$gene),
+               features = unique(topx$feature),
                group.by = "coarse_clusters_shh_harmony",
                angle = 0, 
                raster = FALSE, 
@@ -236,8 +245,10 @@ DefaultAssay(so) <- "RNA"
 ```{r}
 supp_tbl_2 <- "https://static-content.springer.com/esm/art%3A10.1038%2Fs41586-019-1434-6/MediaObjects/41586_2019_1434_MOESM3_ESM.xlsx"
 
+if(!file.exists("../docs/northcutt_sup_tbl_2.xlsx")){
+  download.file(supp_tbl_2, "../docs/northcutt_sup_tbl_2.xlsx")
+}
 
-download.file(supp_tbl_2, "../docs/northcutt_sup_tbl_2.xlsx")
 sup_tbl <- read_excel("../docs/northcutt_sup_tbl_2.xlsx", 
            sheet = 2,
            skip = 3) 
@@ -271,7 +282,7 @@ for (i in seq_along(ssh_mps)){
                        seed = 42)
 }
 
-new_ids <- str_c(names(ssh_mps), "1")
+new_ids <- str_c(names(ssh_mps), "1") %>% str_replace("-", ".")
 new_id_idx <- match(new_ids, colnames(so@meta.data))
 colnames(so@meta.data)[new_id_idx] <- mp_ids
   
@@ -279,7 +290,6 @@ colnames(so@meta.data)[new_id_idx] <- mp_ids
 
 
 ```{r}
-
 so <- CellCycleScoring(so,
                       g2m.features = cc.genes$g2m.genes,
                       s.features = cc.genes$s.genes)
@@ -287,7 +297,7 @@ so <- CellCycleScoring(so,
 
 
 ```{r}
-saveRDS(so, "objects/shh.rds")
+saveRDS(so, "objects/shh2.rds")
 ```
 
 
@@ -395,4 +405,24 @@ write_avg_expr(so,
                "coarse_clusters_shh_harmony",
                file.path(avg_tbl_dir, 
                          "avgexpr.tsv.gz"))
+```
+
+
+
+```{r}
+mat <- as.matrix(so@assays$RNA@counts)
+source("../R/CytoTRACE.R")
+a <- CytoTRACE(mat, ncores = 4)
+
+res <- tibble(
+  cell = names(a$GCS),
+  GCS = a$GCS,
+  CytoTRACE = a$CytoTRACE) %>% 
+  left_join(get_metadata(so), ., by = "cell") %>% 
+  select(cell, GCS, CytoTRACE) %>% 
+  mutate(GCS = ifelse(is.na(GCS), 0, GCS),
+         CytoTRACE = ifelse(is.na(CytoTRACE), -1, CytoTRACE)) %>% 
+  column_to_rownames("cell")
+
+so <- AddMetaData(so, res)
 ```

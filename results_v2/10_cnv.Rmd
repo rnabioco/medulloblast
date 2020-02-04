@@ -45,9 +45,12 @@ Here is the coding for the inferCNV hmm results:
 
 
 ```{r}
-mkrs <- read_tsv(file.path(mkrs_dir, "upn_markers_neoplastic_pos_and_neg.tsv"),
-                 col_types = c("nnnnncc")) %>% 
-  filter(p_val_adj <0.01)
+mkrs <- read_tsv(file.path(mkrs_dir, 
+                           "upn_markers_neoplastic_pos_and_neg.tsv"),
+                 col_types = c("ccnnnnnnnn")) %>% 
+  filter(padj < 0.01,
+         pct_in > 0.10,
+         abs(logFC) > log(1.25))
 
 subgroups <- c("shh", "gp34", "gp3", "gp4")
 names(subgroups) <- c("shh", "gp34", "gp3", "gp4")
@@ -71,17 +74,18 @@ cnv_reports <- mutate(cnv_reports,
                         TRUE ~ "neutral"
                                       )) 
 
-upns <- intersect(names(mkr_gene_list), names(cnv_gene_list))
 
 # get list of gnes up and down per UPN
-mkr_gene_list <- split(mkrs, mkrs$cluster) %>% 
-  map(~list(loss = filter(.x, avg_logFC < 0) %>% pull(gene), 
-            gain = filter(.x, avg_logFC > 0) %>% pull(gene) ))
+mkr_gene_list <- split(mkrs, mkrs$group) %>% 
+  map(~list(loss = filter(.x, logFC < 0) %>% pull(feature), 
+            gain = filter(.x, logFC > 0) %>% pull(feature) ))
 
 
 cnv_gene_list <- split(cnv_reports, cnv_reports$upn) %>%
    map(~list(loss = filter(.x, change == "loss") %>% pull(gene), 
             gain = filter(.x, change == "gain") %>% pull(gene)))
+
+upns <- intersect(names(mkr_gene_list), names(cnv_gene_list))
 ```
 
 
@@ -147,6 +151,102 @@ res <- res %>%
 res
 ```
 
+
+```{r}
+mdata <- so@meta.data %>% 
+  as_tibble() %>% 
+  select(UPN, subgroup) %>%
+  unique() 
+
+plt_dat <- res %>% 
+  left_join(mdata, by = c("upn" = "UPN")) %>% 
+  select(upn, 
+         subgroup,
+         `Marker genes\nin CNVs` = prop_markers_in_cnv, 
+         `CNV genes\nin transcriptome` = prop_genes_in_cnv_in_genome) %>% 
+  pivot_longer(cols = -c(upn, subgroup)) 
+
+p <- ggplot(plt_dat, aes(upn, value)) +
+  geom_col(aes(fill = name), position = position_dodge2()) +
+  labs(x = "",
+       y = "Proportion") +
+  facet_grid(subgroup ~ ., space = "free", scales = "free") + 
+  scale_fill_manual(name = "",
+                    values = palette_OkabeIto) + 
+  coord_flip() + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+        legend.position = "top",
+        strip.text = element_text(size = 6))
+
+save_plot("figs/cnv_marker_enrichment.pdf", p, base_asp = 0.75, base_height = 6.5)
+```
 For most tumors there is a signficant overlap between marker genes and CNV regions. 1202 and 1224 have non-significant overlap. 
 
 
+# Examine subclones
+
+For some tumors it appears that there are some subclones based on CNV. For this anslysis I will split each tumor into 2 subclones based on HClustering on the CNV results. Then genexpression between theses splits will be evaluated to see if there are DE genes. 
+
+```{r}
+library(ape)
+library(dendextend)
+library(scbp)
+so <- readRDS("objects/gp34.rds")
+
+subgroups <- c(
+  "shh",
+  "gp3",
+  "gp34",
+  "gp4"
+)
+
+trees <- map(subgroups,
+             ~read.tree(
+               file.path("inferCNV",
+             .x, .x,  "infercnv.observations_dendrogram.txt"))) 
+
+# merge dendograms, try to figure out reasonable split
+ds <- map(trees, 
+    ~map(.x, as.dendrogram)) %>% 
+  map(., 
+      ~Reduce(function(x, y){merge(x,y)}, .x))
+
+z <- labels(ds[[1]]) %>% str_split("_", simplify = TRUE) %>% .[, 1] %>% as.numeric(as.factor(.))
+
+a <- color_branches(ds[[1]], clusters = z) 
+plot(a)
+
+map(trees, 
+    ~map(.x, ~dendextend::cutree(.x, k = 2)) %>% unlist()) %>%
+  unlist() -> a
+
+so$cnv <- a[colnames(so)]
+so$cnv <- ifelse(is.na(so$cnv), -1,so$cnv)
+```
+
+```{r}
+
+to_plot <- c(
+  "cnv",
+  "UPN",
+  "nCount_RNA",
+  "subgroup"
+)
+
+map2(to_plot, 
+    c("by_feature",
+      "random",
+      "random",
+      "random"),
+    ~plot_feature(so, 
+               .x, 
+               pt_alpha = 0.7, 
+               sorted = .y,
+               embedding = "umap")) %>% 
+  plot_grid(plotlist = .)
+```
+
+```{r}
+plot_violin(get_metadata(so), "cnv", "nCount_RNA")
+
+```

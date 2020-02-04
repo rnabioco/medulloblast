@@ -21,7 +21,7 @@ so <- readRDS(file.path("objects", "all_neoplastic.rds"))
 
 
 ```{r}
-gp_cells <- colnames(so)[so$subgroup != "SHH"]
+gp_cells <- colnames(so)[!so$subgroup %in% c("SHH", "WNT")]
 
 so <- so[, gp_cells]
 
@@ -33,12 +33,12 @@ so <- FindVariableFeatures(
 )
 
 so <- ScaleData(so, features = VariableFeatures(so), 
-                  vars.to.regress = c("percent.mt", "nCount_RNA"), 
+                  vars.to.regress = "percent.mt", 
                   verbose = TRUE)
 
 so <- RunPCA(so, 
              features = VariableFeatures(so),
-             npcs = 100, 
+             npcs = 50, 
              verbose = FALSE)
 
 ElbowPlot(so, ndims = 100)
@@ -58,7 +58,7 @@ so <- RunUMAP(so,
 so <- FindClusters(so, 
                    resolution = c(0.1, 0.3, 0.5))
 
-so$coarse_clusters_shh <- so$RNA_snn_res.0.1
+so$coarse_clusters_gp34 <- so$RNA_snn_res.0.1
 
 Idents(so) <- "coarse_clusters_gp34"
 
@@ -81,40 +81,42 @@ so <- RunUMAP(so,
               dims = 1:40, 
               min.dist = 0.2,
               n.neighbors = 30L,
-              reduction.name = "umap_harmony",
+              reduction.name = "harmony_umap",
               reduction.key = "UMAP_Harmony_")
 
-plot_feature(so, "UPN", embedding = "umap_harmony")
-plot_umap(so, "UPN")
-plot_umap(so, "subtype")
 
 so <- FindNeighbors(so, reduction = "harmony", dims = 1:40)
 so <- FindClusters(so, resolution = 0.2)
 
-
-
-
 so$coarse_clusters_gp34_harmony <- so$seurat_clusters
 Idents(so) <- "coarse_clusters_gp34_harmony"
-plot_feature(so, "coarse_clusters_gp34_harmony", embedding = "umap_harmony")
+plot_harmony(so, "coarse_clusters_gp34_harmony")
 ```
 
 ```{r}
-saveRDS(so, "objects/gp34.rds")
+saveRDS(so, "objects/gp34_2.rds")
+```
+
+```{r}
+so <- readRDS("objects/gp34_2.rds")
 ```
 
 
 ```{r markers of each subgroup}
-so <- readRDS("objects/gp34.rds")
+library(presto)
+mkrs <- wilcoxauc(so, "coarse_clusters_gp34_harmony")
 
-Idents(so) <- "coarse_clusters_gp34_harmony"
+mkrs <- filter(mkrs, logFC > 0, padj < 0.05) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC), .by_group = TRUE)
 
-mkrs <- FindAllMarkers(so, only.pos = TRUE)
+mkrs %>% 
+  write_tsv(file.path(mkrs_dir, "harmony_markers_gp34.tsv"))
 
-write_tsv(mkrs, 
-          file.path(mkrs_dir, "harmony_markers_gp34.tsv"))
-
-write_markers_xlsx(split(mkrs, mkrs$cluster),
+mkrs %>% 
+  ungroup() %>% 
+  split(., .$group) %>% 
+  write_markers_xlsx(.,
                    file.path(xcel_dir, "harmony_markers_gp34.xlsx"))
 ```
 
@@ -125,17 +127,19 @@ library(gprofiler2)
 library(ggrepel)
 mkrs <- read_tsv(file.path(mkrs_dir, 
                     "harmony_markers_gp34.tsv")) %>% 
-  filter( p_val_adj < 0.05)
+  filter( padj < 0.05) %>% 
+  group_by(group) %>% 
+  slice(1:500)
 
-mkrs_split <- split(mkrs, mkrs$cluster) %>% 
-  map(~pull(.x, gene))
+mkrs_split <- split(mkrs, mkrs$group) %>% 
+  map(~pull(.x, feature))
+
 go_res <- gost(mkrs_split, 
                ordered_query = TRUE,
                sources = c("GO", 
                           "KEGG", 
                           "REAC", 
                           "TF"))
-
 
 go_res[["result"]] %>% 
   mutate(parents = unlist(map(parents, 
@@ -157,10 +161,10 @@ go_res[["result"]] %>%
 ```{r}
 topx <- read_tsv(file.path(mkrs_dir, 
                     "harmony_markers_gp34.tsv")) %>% 
-  filter(p_val_adj < 0.05,
-         cluster %in% as.character(c(0:5))) %>% 
-  group_by(cluster) %>% 
-  arrange(p_val_adj, .by_group = TRUE) %>% 
+  filter(padj < 0.05) %>% 
+   mutate(group = as.factor(as.integer(group))) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC), .by_group = TRUE) %>% 
   slice(1:10)
 
 so <- ScaleData(so, features = rownames(so))
@@ -172,7 +176,7 @@ tmp_so$coarse_clusters_gp34_harmony <- factor(tmp_so$coarse_clusters_gp34_harmon
 
 p <- DoHeatmap(tmp_so, 
                group.colors = discrete_palette_default,
-               features = unique(topx$gene),
+               features = unique(topx$feature),
                group.by = "coarse_clusters_gp34_harmony",
                angle = 0, 
                raster = FALSE, 
@@ -230,8 +234,10 @@ DefaultAssay(so) <- "RNA"
 ```{r}
 supp_tbl_2 <- "https://static-content.springer.com/esm/art%3A10.1038%2Fs41586-019-1434-6/MediaObjects/41586_2019_1434_MOESM3_ESM.xlsx"
 
+if(!file.exists("../docs/northcutt_sup_tbl_2.xlsx")){
+  download.file(supp_tbl_2, "../docs/northcutt_sup_tbl_2.xlsx")
+}
 
-download.file(supp_tbl_2, "../docs/northcutt_sup_tbl_2.xlsx")
 sup_tbl <- read_excel("../docs/northcutt_sup_tbl_2.xlsx", 
            sheet = 2,
            skip = 3) 
@@ -268,16 +274,14 @@ for (i in seq_along(gp34_mps)){
                        seed = 42)
 }
 
-new_ids <- str_c(mp_ids, "1")
+new_ids <- str_c(make.names(mp_ids), "1") 
+
 new_id_idx <- match(new_ids, colnames(so@meta.data))
 colnames(so@meta.data)[new_id_idx] <- mp_ids
-  
-
 ```
 
 
 ```{r}
-
 so <- CellCycleScoring(so,
                        g2m.features = cc.genes$g2m.genes,
                        s.features = cc.genes$s.genes)
@@ -287,7 +291,7 @@ so <- CellCycleScoring(so,
 ## Save object and write out matrix for other tools
 
 ```{r}
-saveRDS(so, "objects/gp34.rds")
+saveRDS(so, "objects/gp34_2.rds")
 ```
 
 ```{r}
@@ -392,4 +396,288 @@ write_avg_expr(so,
                "coarse_clusters_gp34_harmony",
                file.path(avg_tbl_dir, 
                          "avgexpr.tsv.gz"))
+```
+
+## Fix sample 1202 label
+
+UPN 1202 is now classified as GP3 not GP3/4 based on methlyation data. 
+
+
+```{r}
+sg_levels <- levels(so$subgroup)
+upn_levels <- levels(so$UPN)
+
+so@meta.data <- so@meta.data %>% 
+  rownames_to_column("cell") %>% 
+  mutate(
+    subgroup = as.character(subgroup),
+    subgroup = ifelse(UPN == "1202",
+                           "GP3",
+                           subgroup),
+    subgroup = factor(subgroup, levels = sg_levels)) %>% 
+  column_to_rownames("cell")
+          
+plot_umap(so, "subgroup")
+plot_umap(so, "UPN")
+
+saveRDS(so, "objects/gp34.rds")
+```
+
+
+## CytoTRACE
+
+```{r}
+source("../R/CytoTRACE.R")
+#subset to genes expressed in at least 25 cells
+to_keep <- Matrix::rowSums(so@assays$RNA@counts > 0) > 25
+
+a <- CytoTRACE(as.matrix(so@assays$RNA@counts[to_keep, ]),
+               ncores = 4)
+
+res <- tibble(
+  cell = names(a$GCS),
+  GCS = a$GCS,
+  CytoTRACE = a$CytoTRACE) %>% 
+  left_join(get_metadata(so), ., by = "cell") %>% 
+  select(cell, GCS, CytoTRACE) %>% 
+  mutate(GCS = ifelse(is.na(GCS), 0, GCS),
+         CytoTRACE = ifelse(is.na(CytoTRACE), -1, CytoTRACE)) %>% 
+  column_to_rownames("cell")
+
+so <- AddMetaData(so, res)
+
+plot_feature(so, 
+             "CytoTRACE",
+             embedding = "umap_harmony",
+             sorted = FALSE)
+
+plot_feature(so, 
+             "GCS",
+             embedding = "umap_harmony",
+             sorted = FALSE)
+
+plot_feature(so, 
+             "nFeature_RNA",
+             embedding = "umap_harmony",
+             sorted = FALSE)
+```
+
+## Group3 only analysis
+
+UPN 1202 is now classified as GP3 not GP3/4 based on methlyation data. 
+
+
+```{r}
+so_gp3 <- subset(so, subset = subgroup == "GP3")
+so_gp4 <- subset(so, subset = subgroup == "GP4")
+```
+
+
+```{r}
+so <- FindVariableFeatures(
+  so_gp3,
+  selection.method = "vst",
+  nfeatures = 3000,
+  verbose = FALSE
+)
+
+so <- ScaleData(so, features = VariableFeatures(so), 
+                  verbose = TRUE)
+
+so <- RunPCA(so, 
+             features = VariableFeatures(so),
+             npcs = 50, 
+             verbose = FALSE)
+
+ElbowPlot(so, ndims = 50)
+
+# make graphs and use graphs for UMAP
+so <- FindNeighbors(so, 
+                      reduction = "pca", 
+                      dims = 1:50, 
+                      k.param = 50L)
+
+
+so <- RunUMAP(so, 
+              dims = 1:50, 
+              n.neighbors = 30L,
+              min.dist = 0.4)
+
+so <- FindClusters(so, 
+                   resolution = c(0.1, 0.3, 0.5))
+
+so$coarse_clusters_gp3 <- so$RNA_snn_res.0.1
+
+Idents(so) <- "coarse_clusters_gp3"
+
+plot_umap(so, "coarse_clusters_gp3")
+plot_umap(so, "UPN")
+plot_umap(so, "subtype")
+```
+
+## Harmonize
+
+```{r}
+library(harmony)
+so <- RunHarmony(so,
+                 "UPN", 
+                 theta = 1.5,
+                 plot_convergence = TRUE)
+
+so <- RunUMAP(so, 
+              reduction = "harmony", 
+              dims = 1:50, 
+              min.dist = 0.3,
+              n.neighbors = 30L,
+              reduction.name = "umap_harmony",
+              reduction.key = "UMAP_Harmony_")
+
+plot_feature(so, "UPN", embedding = "umap_harmony")
+plot_umap(so, "UPN")
+plot_umap(so, "subtype")
+
+so <- FindNeighbors(so, reduction = "harmony", dims = 1:40)
+so <- FindClusters(so, resolution = 0.2)
+
+
+so$coarse_clusters_gp3_harmony <- so$seurat_clusters
+Idents(so) <- "coarse_clusters_gp3_harmony"
+plot_feature(so, "coarse_clusters_gp3_harmony", embedding = "umap_harmony")
+plot_feature(so, "NRL", embedding = "umap_harmony")
+```
+
+
+```{r}
+library(presto)
+library(scbp)
+mkrs <- wilcoxauc(so, "coarse_clusters_gp3_harmony")
+
+filter(mkrs, 
+       logFC > 0, padj < 0.05) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC)) %>% 
+write_tsv(., 
+          file.path(mkrs_dir, "harmony_markers_gp3_only.tsv"))
+
+filter(mkrs, 
+       logFC > 0, padj < 0.05) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC)) %>% 
+  ungroup() %>% 
+  split(., .$group) %>% 
+scbp::write_markers_xlsx(.,
+                   file.path(xcel_dir, "harmony_markers_gp3_only.xlsx"))
+```
+
+```{r}
+saveRDS(so, "objects/gp3_only.rds")
+```
+
+```{r, eval = FALSE}
+so <- readRDS("objects/gp3_only.rds")
+```
+## GP4 only
+
+```{r}
+so <- FindVariableFeatures(
+  so_gp4,
+  selection.method = "vst",
+  nfeatures = 3000,
+  verbose = FALSE
+)
+
+so <- ScaleData(so, features = VariableFeatures(so), 
+                  vars.to.regress = c("percent.mt", "nCount_RNA"), 
+                  verbose = TRUE)
+
+so <- RunPCA(so, 
+             features = VariableFeatures(so),
+             npcs = 50, 
+             verbose = FALSE)
+
+ElbowPlot(so, ndims = 50)
+
+# make graphs and use graphs for UMAP
+so <- FindNeighbors(so, 
+                      reduction = "pca", 
+                      dims = 1:50, 
+                      k.param = 50L)
+
+
+so <- RunUMAP(so, 
+              dims = 1:50, 
+              n.neighbors = 30L,
+              min.dist = 0.4)
+
+so <- FindClusters(so, 
+                   resolution = c(0.1, 0.3, 0.5))
+
+so$coarse_clusters_gp4 <- so$RNA_snn_res.0.1
+
+Idents(so) <- "coarse_clusters_gp4"
+
+plot_umap(so, "coarse_clusters_gp4")
+plot_umap(so, "UPN")
+plot_umap(so, "subtype")
+```
+
+## Harmonize
+
+```{r}
+so <- RunHarmony(so,
+                 "UPN", 
+                 theta = 1.5,
+                 plot_convergence = TRUE)
+
+so <- RunUMAP(so, 
+              reduction = "harmony", 
+              dims = 1:50, 
+              min.dist = 0.3,
+              n.neighbors = 30L,
+              reduction.name = "umap_harmony",
+              reduction.key = "UMAP_Harmony_")
+
+plot_feature(so, "UPN", embedding = "umap_harmony")
+plot_umap(so, "UPN")
+plot_umap(so, "subtype")
+
+so <- FindNeighbors(so, reduction = "harmony", dims = 1:40)
+so <- FindClusters(so, resolution = 0.2)
+
+
+so$coarse_clusters_gp4_harmony <- so$seurat_clusters
+Idents(so) <- "coarse_clusters_gp4_harmony"
+plot_feature(so, "coarse_clusters_gp4_harmony", embedding = "umap_harmony")
+```
+
+```{r}
+library(presto)
+library(scbp)
+mkrs <- wilcoxauc(so, "coarse_clusters_gp4_harmony")
+
+filter(mkrs, 
+       logFC > 0, padj < 0.05) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC)) %>% 
+  ungroup() %>% 
+write_tsv(., 
+          file.path(mkrs_dir, "harmony_markers_gp4_only.tsv"))
+
+filter(mkrs, 
+       logFC > 0, padj < 0.05) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC)) %>% 
+  ungroup() %>% 
+  split(., .$group) %>% 
+scbp::write_markers_xlsx(.,
+                   file.path(xcel_dir, "harmony_markers_gp4_only.xlsx"))
+```
+
+
+```{r}
+saveRDS(so, "objects/gp4_only.rds")
+```
+
+```{r, eval = FALSE}
+so <- readRDS("objects/gp4_only.rds")
 ```

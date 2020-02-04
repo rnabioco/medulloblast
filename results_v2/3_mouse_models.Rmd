@@ -1744,7 +1744,7 @@ dev.off()
 
 
 
-# Combine datasets 
+# Combine immune datasets 
 
 
 ```{r}
@@ -2037,32 +2037,25 @@ plot_grid(a, b, c, nrow = 1, ncol = 3, rel_widths = c(1.25,1,1.25)) %>%
 
 Do some data wranging to generate seurat objects with 1-to-1 mouse and human orthologs named with Human gene ids. 
 
+```{r}
+ssh_so <- readRDS(file.path("objects",
+                  "mouse_models",
+                  "shh_model_sobj.rds"))
+gp_so <- readRDS(file.path("objects",
+                  "mouse_models",
+                  "mb_models_sobj.rds"))
 
-```{r load_dat}
-so_h <- readRDS(file.path("objects", "so.rds"))
-so_m <- readRDS(file.path("objects", "mouse_models", "combined.rds"))
+so_m <- merge(ssh_so, gp_so)
+so_h <- readRDS(file.path("objects", "all_neoplastic.rds"))
+```
 
-# subset human model to malignant cells
-malignant_cells <- colnames(so_h)[so_h$coarse_cell_type == "malignant"]
-so_h <- so_h[, malignant_cells]
+```{r load_human_dat}
 
 # subset mouse model to malignant cells
 malignant_cells <- colnames(so_m)[so_m$cell_types == "malignant"]
-so_m <- so_m[, malignant_cells]
+so_m <- so_m[ , malignant_cells]
 
 # use shared genes based on ortholog table
-
-# get 1-to-1 orthologs
-orthologs <- orthologs %>% 
-  na.omit() %>% 
-  group_by(external_gene_name) %>% 
-  mutate(n_mouse_orthologs = n()) %>%
-  ungroup() %>% 
-  group_by(mmusculus_homolog_associated_gene_name) %>% 
-  mutate(n_human_orthologs = n()) %>% 
-  ungroup() %>% 
-  filter(n_mouse_orthologs == 1,
-         n_human_orthologs == 1)
 
 count_mat <- so_m@assays$RNA@counts
 norm_mat <- so_m@assays$RNA@data
@@ -2077,7 +2070,7 @@ genes_to_keep <- which(!is.na(new_gids$external_gene_name))
 count_mat <- count_mat[genes_to_keep, ]
 norm_mat <- norm_mat[genes_to_keep, ]
 
-rownames(count_mat) <-new_gids$external_gene_name[genes_to_keep]
+rownames(count_mat) <- new_gids$external_gene_name[genes_to_keep]
 rownames(norm_mat) <- new_gids$external_gene_name[genes_to_keep]
 
 so_m <- CreateSeuratObject(count_mat, 
@@ -2090,60 +2083,109 @@ shared_ids <- intersect(rownames(so_m), rownames(so_h))
 so_m <- so_m[shared_ids, ]
 so_h <- so_h[shared_ids, ]
 
-so_m$subgroup <- "mouse_model"
+so_m$subgroup <- ifelse(str_detect(so_m$UPN, "^MED"),
+                        "shh_model",
+                        ifelse(so_m$UPN == "2_MP",
+                               "MYC_DNP53_model",
+                               ifelse(
+                               so_m$UPN == "3_MG",
+                               "MYC_GFI1_model",
+                               NA)))
+  
 so_m$species <- "mouse"
 so_h$species <- "human"
 
-sos <- list(mouse_mb = so_m, human_mb = so_h)
+so <- merge(so_h, so_m)
 ```
 
+Run without integration first
 
 ```{r}
-for (i in 1:length(sos)) {
-    sos[[i]] <- NormalizeData(sos[[i]], verbose = FALSE)
-    sos[[i]] <- FindVariableFeatures(sos[[i]], selection.method = "vst", 
-        nfeatures = 2000, verbose = FALSE)
-}
+so <- FindVariableFeatures(
+        so,
+        selection.method = "vst",
+        nfeatures = 3000,
+        verbose = FALSE
+    )
+so <-
+    ScaleData(so,
+              features = VariableFeatures(so),
+              verbose = FALSE)
+so <-
+    RunPCA(so,
+           features = VariableFeatures(so),
+           verbose = FALSE)
+so <- RunUMAP(so, dims = 1:30)
 
-features <- SelectIntegrationFeatures(sos)
 
-sos <- lapply(sos, FUN = function(x) {
-    x <- ScaleData(x, features = features, verbose = FALSE)
-    x <- RunPCA(x, features = features, verbose = FALSE)
-})
+to_plot <- c(
+  "species",
+  "subgroup"
+)
 
+plt <- map(to_plot, ~plot_umap(so, .x)) %>% 
+  plot_grid(plotlist = ., nrow = 1, ncol = 2)
+plt
+save_plot(file.path(fig_dir, "mouse_model_with_human_unintegrated.pdf"), 
+          plt, 
+          base_asp = 1.5,
+          nrow = 1,
+          ncol = 2)
 ```
 
-Trying using reciprocal PCA approach for dataset integeration using develop version of seurat. 
+Integrate via harmony
 
 ```{r}
-anchors <- FindIntegrationAnchors(sos, 
-                                  reduction = "rpca", 
-                                  dims = 1:30)
+library(harmony)
 
-sos_integrated <- IntegrateData(anchors, 
-                                dims = 1:30)
+so <- RunHarmony(so, group.by.vars = "UPN")
+
+so <- RunUMAP(so,
+              reduction = "harmony",
+              dims = 1:30,
+              reduction.name = "harmony_umap")
+
+so <- FindNeighbors(so,
+                    reduction = "harmony",
+                    dims = 1:20)
+
+to_plot <- c(
+  "species",
+  "subgroup"
+)
+
+plt <- map(to_plot, 
+           ~plot_feature(so, .x, pt_alpha = 0.6, 
+                         .cols = palette_OkabeIto,
+                         embedding = "harmony_umap")) %>% 
+  plot_grid(plotlist = ., 
+            nrow = 1, ncol = 2)
+
+plt
+
+save_plot(file.path(fig_dir, "mouse_model_with_human_integrated.pdf"), 
+          plt, 
+          base_asp = 1.5,
+          nrow = 1,
+          ncol = 2)
+
+p <- plot_features_split(so, 
+                    "subgroup",
+                    "subgroup", 
+                    pt_alpha = 0.6, 
+                    cols = palette_OkabeIto,
+                    embedding = "harmony_umap")
+
+p
+save_plot(file.path(fig_dir, "mouse_model_with_human_integrated_subgroups.pdf"), 
+          p, 
+          base_asp = 1.5,
+          nrow =3,
+          ncol = 3)
 ```
 
-
 ```{r}
-sos_integrated <- ScaleData(sos_integrated, verbose = FALSE)
-sos_integrated <- RunPCA(sos_integrated, verbose = FALSE)
-sos_integrated <- RunUMAP(sos_integrated, dims = 1:30)
-
-DimPlot(sos_integrated, group.by = "orig.ident")
-
-sos_integrated$tumor_type <- ifelse(sos_integrated$species == "mouse",
-                                    str_c("mouse_", sos_integrated$orig.ident),
-                                    str_c("human_", sos_integrated$subgroup, "_", sos_integrated$UPN))
-
-DimPlot(sos_integrated, group.by = "tumor_type")
-
-Idents(sos_integrated) <- "tumor_type"
-sos_integrated <- BuildClusterTree(sos_integrated, dims = 1:30)
-
-PlotClusterTree(sos_integrated)
-saveRDS(sos_integrated, "objects/mouse_models/mouse_human_int.rds")
+saveRDS(so, "objects/mouse_models/mouse_human_harmony_int.rds")
 ```
 
 
@@ -2185,32 +2227,84 @@ avg_expr <- AverageExpression(so_int)
 library(ComplexHeatmap)
 Heatmap(cor(avg_expr$RNA))
 ```
-Just merge without integration and plot
+
+
+## Combine both mouse models
 
 ```{r}
-so_merged <- merge(sos$human_mb, sos$mouse_mb, merge.data = FALSE)
-so_merged <- NormalizeData(so_merged, verbose = FALSE)
-so_merged <-
-    FindVariableFeatures(
-        so_merged,
+ssh_so <- readRDS(file.path("objects",
+                  "mouse_models",
+                  "shh_model_sobj.rds"))
+gp_so <- readRDS(file.path("objects",
+                  "mouse_models",
+                  "mb_models_sobj.rds"))
+
+so <- merge(ssh_so, gp_so)
+
+so <- subset(so,cell_types == "malignant")
+
+so <- FindVariableFeatures(
+        so,
         selection.method = "vst",
-        nfeatures = 2000,
+        nfeatures = 3000,
         verbose = FALSE
     )
-so_merged <-
-    ScaleData(so_merged,
-              features = VariableFeatures(so_merged),
+so <-
+    ScaleData(so,
+              features = VariableFeatures(so),
               verbose = FALSE)
-so_merged <-
-    RunPCA(so_merged,
-           features = VariableFeatures(so_merged),
+so <-
+    RunPCA(so,
+           features = VariableFeatures(so),
            verbose = FALSE)
-so_merged <- RunUMAP(so_merged, dims = 1:30)
 
-DimPlot(so_merged, group.by = "subgroup")
+so <- RunUMAP(so, dims = 1:30)
 
-plt <- plot_umap(so_merged, "subgroup")
+so$expt_ids <- ifelse(is.na(so$expt_ids), 
+                      "SHH (PTC KO)",
+                      so$expt_ids)
 
-save_plot("figs/mouse_models/mouse_model_with_human.pdf", plt, base_asp = 1.5)
+to_plot <- c(
+   str_subset(colnames(so@meta.data), "metafactor")
+)
+
+for(i in to_plot){
+  so@meta.data[[i]]  <- ifelse(is.na(so@meta.data[[i]] ),
+                               0,
+                               so@meta.data[[i]] )
+}
+
+
+mp_ids <-  c(
+  "SHH-A_metafactor1" = "SHH-A-cell_cycle",
+  "SHH-B_metafactor1" = "SHH-B-SHH_signaling",
+  "SHH-C_metafactor1" = "SHH-C-Differentiation",
+  "Group 3/4-A_metafactor1" = "Group 3/4-A-cell_cycle",
+  "Group 3/4-B_metafactor1" = "Group 3/4-B-Translation_Myc",
+  "Group 3/4-C_metafactor1" = "Group 3/4-C-Differentiation")
+
+new_id_idx <- match(names(mp_ids), colnames(so@meta.data))
+colnames(so@meta.data)[new_id_idx] <- mp_ids
+
+to_plot <- mp_ids
+
+p <- plot_umap(so, "expt_ids", legend_title = "")
+
+save_plot(file.path(fig_dir, "mouse_models_combined_expt_ids.pdf"), 
+          p, 
+          base_asp = 1.4,
+          nrow = 1,
+          ncol = 1)
+
+plt <- map(to_plot,
+           ~plot_umap(so, .x, minimal_theme = T, show_negative = T)) %>% 
+  plot_grid(plotlist = ., nrow = 2, ncol = 3)
+plt
+
+save_plot(file.path(fig_dir, "mouse_models_combined_metafactors.pdf"), 
+          plt, 
+          base_asp = 1,
+          nrow = 2,
+          ncol = 3)
+
 ```
-
