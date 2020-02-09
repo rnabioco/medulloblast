@@ -1,8 +1,19 @@
 ---
 title: "SHH analysis"
 author: "Kent Riemondy RBI"
-date: "9/26/2019"
-output: html_document
+date: "`R Sys.Date()`"
+knit: (function(inputFile, encoding) {
+  rmarkdown::render(inputFile, encoding = encoding, output_dir = "html") })
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_collapsed: false
+    theme: cosmo
+    highlight: tango
+    fig_caption: true
+    code_folding: hide
+    df_print: paged
 ---
 
 ```{r setup, include=FALSE}
@@ -10,34 +21,31 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
-source("../R/utils.R")
-library(future)
+source(here::here("/R/utils.R"))
 
-plan("multicore", workers = 7)
-options(future.globals.maxSize = 2 * 1024 ^ 3)
+rmd_dir <- "shh"
 
-proj_dir <- here()
-data_dir <- file.path(proj_dir, "data", "cellranger", "results")
-doc_dir <- file.path(proj_dir, "docs")
+fig_dir <- file.path(fig_dir, rmd_dir)
+mkrs_dir <- file.path(mkrs_dir, rmd_dir)
+tbls_dir <- file.path(tbls_dir, rmd_dir)
+obj_dir <- file.path(obj_dir, rmd_dir)
 
-fig_dir <- "figs"
-mkrs_dir <- "markers"
-tbls_dir <- "tables"
-xcel_dir <- file.path(mkrs_dir, "xlsx")
-walk(c(fig_dir, mkrs_dir, tbls_dir, xcel_dir), 
-     dir.create, 
-     showWarnings = F)
-```
+walk(c(fig_dir, mkrs_dir, tbls_dir, obj_dir),
+     dir.create, showWarnings = F)
 
 
-
-```{r}
-so <- readRDS(file.path("objects", "all_neoplastic.rds"))
+seed_value <- 20200204
 ```
 
 
 ```{r}
-shh_cells <- colnames(so)[so$subgroup =="SHH"]
+so <- qread(file.path("objects", "preprocess", "all_neoplastic.qs"),
+            nthreads = 4)
+```
+
+
+```{r}
+shh_cells <- colnames(so)[so$subgroup == "SHH"]
 
 so <- so[, shh_cells]
 
@@ -48,30 +56,30 @@ so <- FindVariableFeatures(
   verbose = FALSE
 )
 
-so <- ScaleData(so, features = VariableFeatures(so), 
-                  vars.to.regress = "percent.mt", 
-                  verbose = TRUE)
+so <- ScaleData(so, 
+                vars.to.regress = "percent.mt", 
+                features = VariableFeatures(so), verbose = FALSE)
 
 so <- RunPCA(so, 
              features = VariableFeatures(so),
-             npcs = 100, 
-             verbose = FALSE)
+             npcs = 50, 
+             verbose = FALSE, 
+             seed.use = seed_value)
 
-ElbowPlot(so, ndims = 100)
+ElbowPlot(so, ndims = 50)
 
 # make graphs and use graphs for UMAP
 so <- FindNeighbors(so, 
-                      reduction = "pca", 
-                      dims = 1:50, 
-                      k.param = 50L)
-
+                    reduction = "pca", 
+                    dims = 1:30,
+                    k.param = 20L)
 
 so <- RunUMAP(so, 
-              dims = 1:50, 
-              n.neighbors = 30L,
-              min.dist = 0.4)
+              graph = "RNA_snn", 
+              min.dist = 0.4, 
+              seed.use = seed_value)
 
-so <- FindClusters(so, 
+so <- FindClusters(so, random.seed = seed_value,
                    resolution = c(0.1, 0.3, 0.5))
 
 so$coarse_clusters_shh <- so$RNA_snn_res.0.1
@@ -87,16 +95,20 @@ plot_umap(so, "subtype")
 
 ```{r}
 library(harmony)
+set.seed(seed_value)
 so <- RunHarmony(so,
                  "UPN", 
                  theta = 1.5,
                  plot_convergence = TRUE)
 
+so <- FindNeighbors(so, reduction = "harmony", dims = 1:30)
+
 so <- RunUMAP(so, 
               reduction = "harmony", 
-              dims = 1:40, 
-              min.dist = 0.2,
+              dims = 1:30, 
+              min.dist = 0.3,
               n.neighbors = 30L,
+              seed.use = seed_value,
               reduction.name = "harmony_umap",
               reduction.key = "UMAP_Harmony_")
 
@@ -104,27 +116,23 @@ plot_harmony(so, "UPN")
 plot_umap(so, "UPN")
 plot_umap(so, "subtype")
 
-so <- FindNeighbors(so, reduction = "harmony", dims = 1:40)
-so <- FindClusters(so, resolution = 0.3)
-
+so <- FindClusters(so, resolution = 0.3, random.seed = seed_value)
 
 so$coarse_clusters_shh_harmony <- so$seurat_clusters
 Idents(so) <- "coarse_clusters_shh_harmony"
 plot_harmony(so, "coarse_clusters_shh_harmony")
 ```
 
-```{r}
-saveRDS(so, "objects/shh2.rds")
-```
 
-```{r}
-so <- readRDS("objects/shh2.rds")
-```
+
 ## Markers
 
 ```{r markers of each subgroup}
-library(presto)
+
 mkrs <- wilcoxauc(so, "coarse_clusters_shh_harmony")
+
+mkrs %>% 
+  write_tsv(file.path(mkrs_dir, "harmony_markers_shh_all.tsv"))
 
 mkrs <- filter(mkrs, logFC > 0, padj < 0.05) %>% 
   group_by(group) %>% 
@@ -137,7 +145,7 @@ mkrs %>%
   ungroup() %>% 
   split(., .$group) %>% 
   write_markers_xlsx(.,
-                   file.path(xcel_dir, "harmony_markers_shh.xlsx"))
+                   file.path(tbls_dir, "harmony_markers_shh.xlsx"))
 ```
 
 ## Go Terms
@@ -176,6 +184,7 @@ go_res[["result"]] %>%
  
 ## Heatmap of gene expression
 
+
 ```{r}
 topx <- read_tsv(file.path(mkrs_dir, 
                     "harmony_markers_shh.tsv")) %>% 
@@ -203,42 +212,8 @@ save_plot(file.path(fig_dir, "heatmap_markers_shh.pdf"),
           p,
           base_width = 10,
           base_height = 12)
-
-
 ```
 
-## Heatmap by TF activity
-
-```{r}
-so_tf_markers <- read_tsv("tables/shh_tf_activities.tsv")
-
-topx <- so_tf_markers %>% 
-  group_by(cluster) %>% 
-  arrange(p_val_adj, .by_group = TRUE) %>% 
-  slice(1:5)
-
-DefaultAssay(so) <- "TF"
-so <- ScaleData(so)
-
-p <- DoHeatmap(so, 
-               group.colors = discrete_palette_default,
-        features = unique(topx$gene),
-        group.by = "coarse_clusters_shh_harmony",
-        angle = 0, 
-        raster = FALSE, 
-        draw.lines = TRUE)
-
-p <- p +
-  scale_fill_gradientn(colours = viridis::viridis(256),
-                       name = "Regulon AUC\nZ-scores")
-
-save_plot(file.path(fig_dir, "heatmap_tfs_shh.pdf"), 
-          p,
-          base_width = 10,
-          base_height = 6)
-
-DefaultAssay(so) <- "RNA"
-```
 
 ## Add in Northcutt paper metamodule scores
 
@@ -296,37 +271,9 @@ so <- CellCycleScoring(so,
 ```
 
 
-```{r}
-saveRDS(so, "objects/shh2.rds")
-```
-
-
-
-```{r}
-so <- readRDS("objects/shh.rds")
-
-#full count matrix
-GetAssayData(so, "counts") %>% 
-  as.matrix(.) %>% 
-  as.data.frame() %>% 
-  rownames_to_column("gene") %>% 
-  write_tsv("tables/shh_count_matrix.tsv.gz")
-  
-# expression matrix filtered at least 25 cells express the gene
-expr_mat <- GetAssayData(so, "data")
-expr_mat <- expr_mat[Matrix::rowSums(expr_mat > 0) >= 25, ]
-
-expr_mat %>% 
-  as.matrix(.) %>% 
-  as.data.frame() %>% 
-  rownames_to_column("gene") %>% 
-  write_tsv("tables/shh_expr_matrix.tsv.gz")
-  
-```
-
 save loom file for paga
 
-```{r}
+```{r, eval = FALSE}
 
 # drop graphs see https://github.com/theislab/scanpy/issues/598
 tmp_obj <- readRDS("objects/shh.rds")
@@ -393,10 +340,8 @@ tibble(pc = str_c("PC", 1:length(so@reductions$pca@stdev)),
 ## Average Expression per cluster
 
 ```{r}
-
-plot_feature(so, 
-             "coarse_clusters_shh_harmony",
-             embedding = "umap_harmony")
+plot_harmony(so, 
+             "coarse_clusters_shh_harmony")
 
 avg_tbl_dir <- file.path(tbls_dir, "avg_expr", "shh")
 dir.create(avg_tbl_dir, recursive = TRUE)
@@ -408,6 +353,7 @@ write_avg_expr(so,
 ```
 
 
+## Cytotrace 
 
 ```{r}
 mat <- as.matrix(so@assays$RNA@counts)
@@ -425,4 +371,53 @@ res <- tibble(
   column_to_rownames("cell")
 
 so <- AddMetaData(so, res)
+```
+
+
+
+
+```{r}
+#full count matrix
+GetAssayData(so, "counts") %>% 
+  as.matrix(.) %>% 
+  as.data.frame() %>% 
+  rownames_to_column("gene") %>% 
+  data.table::fwrite(., file.path(tbls_dir, "shh_count_matrix.tsv.gz"),
+       sep = "\t",
+       compress = "gzip")
+  
+# expression matrix filtered at least 25 cells express the gene
+expr_mat <- GetAssayData(so, "data")
+expr_mat <- expr_mat[Matrix::rowSums(expr_mat > 0) >= 25, ]
+
+expr_mat %>% 
+  as.matrix(.) %>% 
+  as.data.frame() %>% 
+  rownames_to_column("gene") %>% 
+  data.table::fwrite(., file.path(tbls_dir, "shh_expr_matrix.tsv.gz"),
+       sep = "\t",
+       compress = "gzip")
+
+```
+
+## cluster diversity
+
+```{r}
+a <- calc_diversity(so, "UPN", "coarse_clusters_shh")@meta.data %>% 
+  select(unaligned_cluster_diversity = entropy)
+
+b <- calc_diversity(so, "UPN", "coarse_clusters_shh_harmony")@meta.data %>% 
+  select(aligned_cluster_diversity = entropy)
+
+so <- AddMetaData(so, cbind(a, b))
+```
+
+## save
+
+```{r}
+qsave(so, file.path(obj_dir, "shh.qs"), nthreads = 4)
+```
+
+```{r, eval = FALSE}
+so <- qread(file.path(obj_dir, "shh.qs"), nthreads = 4)
 ```

@@ -1,0 +1,22 @@
+---
+title: "Run all analyses"
+author: "Kent Riemondy RBI"
+date: "`r Sys.Date()`"
+output: html_document
+knit: (function(inputFile, encoding) {
+  rmarkdown::render(inputFile, encoding = encoding, output_dir = "html") })
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(rmarkdown)
+```
+
+## Render all Rmarkdowns
+
+```{r}
+render("1_preprocess.Rmd")
+```

@@ -1,0 +1,352 @@
+---
+title: "Split into neoplastic cells"
+author: "Kent Riemondy RBI"
+date: "`R Sys.Date()`"
+knit: (function(inputFile, encoding) {
+  rmarkdown::render(inputFile, encoding = encoding, output_dir = "html") })
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_collapsed: false
+    theme: cosmo
+    highlight: tango
+    fig_caption: true
+    code_folding: hide
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
+source(here::here("/R/utils.R"))
+
+rmd_dir <- "preprocess"
+
+fig_dir <- file.path(fig_dir, rmd_dir)
+mkrs_dir <- file.path(mkrs_dir, rmd_dir)
+tbls_dir <- file.path(tbls_dir, rmd_dir)
+obj_dir <- file.path(obj_dir, rmd_dir)
+
+walk(c(fig_dir, mkrs_dir, tbls_dir, obj_dir),
+     dir.create, showWarnings = F)
+
+seed_value <- 20200204
+```
+
+
+
+```{r}
+so <- qread(file.path(obj_dir, "so.qs"), nthreads = 4)
+```
+
+
+```{r}
+malignant_cells <- colnames(so)[so$coarse_cell_type == "malignant"]
+
+so <- so[, malignant_cells]
+
+so <- FindVariableFeatures(
+  so,
+  selection.method = "vst",
+  nfeatures = 3000,
+  verbose = FALSE
+)
+
+so <- ScaleData(so,
+                features = VariableFeatures(so), 
+                vars.to.regress = "percent.mt",
+                verbose = TRUE)
+
+so <- RunPCA(so, 
+             features = VariableFeatures(so),
+             npcs = 50, 
+             verbose = FALSE,
+             seed.use = seed_value)
+
+ElbowPlot(so, ndims = 50)
+
+# make graphs and use graphs for UMAP
+so <- FindNeighbors(so, 
+                    reduction = "pca", 
+                    dims = 1:40, 
+                    k.param = 20L)
+
+so <- RunUMAP(so, 
+              graph = "RNA_snn", 
+              min.dist = 0.3, 
+              seed.use = seed_value)
+
+plot_umap(so, "subgroup")
+
+
+so <- FindClusters(so, 
+                   resolution = c(0.1, 0.3, 0.5), 
+                   random.seed = seed_value)
+
+so$coarse_clusters_malignant <- so$RNA_snn_res.0.1
+
+Idents(so) <- "coarse_clusters_malignant"
+
+
+plot_umap(so, "coarse_clusters_malignant")
+
+plot_umap(so, "subgroup")
+```
+
+## Compare to Cavatelli subgroups
+
+```{r, fig.width = 18, fig.height = 8}
+array_mdata <- read.table(file.path(doc_dir,
+                                    "microarray_data",
+                                    "2019_09_04_tidy_CEL_annotation_file_for_Cavalli_2012.txt"),
+                          stringsAsFactors = FALSE) %>% 
+  as_tibble() %>% 
+  mutate(Subtype = str_trim(Subtype))
+
+array_mat <- read.table(file.path(doc_dir,
+                                    "microarray_data",
+                                "2019_09_04_expression_data_all_medullo_Cavalli_GEO_numbers.txt"),
+                        stringsAsFactors = FALSE) %>% 
+  as_tibble()
+
+# average probesets
+expr_mat <- array_mat %>% 
+  gather("key", "value", -sym) %>% 
+  group_by(sym, key) %>% 
+  summarize(value = mean(value)) %>%
+  spread(key, value) %>%
+  as.data.frame() %>% 
+  column_to_rownames("sym") %>% 
+  as.matrix()
+
+# average probesets across subtypes
+avg_mat <- unique(array_mdata$Subtype) %>% 
+  map(function(x){
+    cols <- array_mdata[which(array_mdata$Subtype == x), 
+                   "GEO_number", 
+                   drop = TRUE]
+    
+    vals <- rowMeans(expr_mat[, cols])
+    res <- tibble(sym = names(vals))
+    res[[x]] <- vals
+    res
+    }) %>% 
+  Reduce(function(x, y) {left_join(x, y, by = "sym")}, .) %>% 
+  as.data.frame() %>% 
+  column_to_rownames("sym") %>% 
+  as.matrix()
+
+library(clustifyr)
+
+res <- clustify(so, 
+                ref_mat = avg_mat,
+                cluster_col = "coarse_clusters", 
+                seurat_out = FALSE) %>% 
+  cor_to_call(.) %>% 
+  left_join(rownames_to_column(so@meta.data, "cell"), .,
+            by = c("coarse_clusters" = "cluster")) %>% 
+  dplyr::select(cell, 
+                subtype = type, 
+                subtype_cor = r) %>% 
+  as.data.frame() %>% 
+  column_to_rownames("cell")
+
+so <- AddMetaData(so, res)
+a <- plot_umap(so, "subtype")
+b <- plot_umap(so, "subgroup")
+d <- plot_umap(so, "UPN")
+plot_grid(a, b, d, nrow = 1)
+```
+
+
+
+```{r markers of each subgroup}
+mkrs <- wilcoxauc(so, "subgroup")
+
+mkrs <- filter(mkrs, 
+       logFC > 0, padj < 0.05) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC)) %>% 
+  ungroup()
+
+write_tsv(mkrs, file.path(mkrs_dir, "subgroup_markers_neoplastic.tsv"))
+
+mkrs %>% 
+  split(., .$group) %>% 
+  write_markers_xlsx(.,
+                   file.path(tbls_dir, "subgroup_markers_neoplastic.xlsx"))
+
+```
+
+```{r markers of each patient sample}
+mkrs <- wilcoxauc(so, "UPN")
+
+mkrs <- filter(mkrs, 
+       logFC > 0, padj < 0.05) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC)) %>% 
+  ungroup()
+
+write_tsv(mkrs, file.path(mkrs_dir, "upn_markers_neoplastic.tsv"))
+
+mkrs %>% 
+  split(., .$group) %>% 
+  write_markers_xlsx(.,
+                   file.path(tbls_dir, "upn_markers_neoplastic.xlsx"))
+
+mkrs <- wilcoxauc(so, "UPN")
+
+mkrs <- filter(mkrs, 
+       padj < 0.05) %>% 
+    group_by(group) %>% 
+  arrange(padj, desc(logFC)) %>% 
+  ungroup()
+
+write_tsv(mkrs, file.path(mkrs_dir, "upn_markers_neoplastic_pos_and_neg.tsv"))
+
+mkrs %>% 
+  split(., .$group) %>% 
+  write_markers_xlsx(.,
+                   file.path(tbls_dir, "upn_markers_neoplastic_pos_and_neg.xlsx"))
+```
+
+### Get top PC genes
+
+```{r}
+to_plot <- c("UPN", "coarse_cell_type", "subgroup")
+
+dims_to_plot <- list(
+  c(1,2),
+  c(2,3),
+  c(3,4),
+  c(4,5))
+  
+plts <- list()
+for ( i in seq_along(dims_to_plot)){
+  plts[[i]] <- map(to_plot, ~plot_pca(so, .x, dims =dims_to_plot[[i]])) %>%
+  plot_grid(plotlist = ., nrow = 1, ncol = length(to_plot),
+            rel_widths = c(1.75, 1.5, 1))
+}
+
+names(plts) <- str_c("pc_", 
+                     map_chr(dims_to_plot, ~str_c(.x, collapse = "_")),
+                     ".pdf")
+pc_dir <- file.path(fig_dir, "pcs_all_neoplastic")
+dir.create(pc_dir)
+iwalk(plts,
+  ~save_plot(file.path(pc_dir, .y), .x, nrow = 1, ncol = 3))
+
+
+pc_loadings <- so@reductions$pca@feature.loadings[, 1:20] %>% 
+  as.data.frame() %>% 
+  tibble::rownames_to_column("gene") %>% 
+  arrange(desc(PC_1))
+
+pc_tbl_dir <- file.path(tbls_dir, "pcs", "all_neoplastic")
+dir.create(pc_tbl_dir, recursive = TRUE)
+write_tsv(pc_loadings, file.path(pc_tbl_dir, "pc_loadings.tsv.gz"))
+
+tibble(pc = str_c("PC", 1:length(so@reductions$pca@stdev)), 
+                  stdev = so@reductions$pca@stdev) %>% 
+  write_tsv(file.path(pc_tbl_dir, "pc_variance_explained.tsv"))
+
+```
+
+## harmonize
+
+```{r}
+library(harmony)
+set.seed(seed_value)
+so <- RunHarmony(so,
+                 "UPN", 
+                 theta = 1.5,
+                 plot_convergence = TRUE)
+
+so <- RunUMAP(so, 
+              reduction = "harmony", 
+              dims = 1:30, 
+              min.dist = 0.3,
+              n.neighbors = 30L,
+              seed.use =  seed_value,
+              reduction.name = "harmony_umap",
+              reduction.key = "UMAP_Harmony_")
+
+so <- FindNeighbors(so, reduction = "harmony", dims = 1:30)
+so <- FindClusters(so, resolution = 0.2, random.seed =  seed_value)
+
+plot_harmony(so, "subgroup")
+plot_harmony(so, "seurat_clusters")
+
+so$coarse_clusters_malignant_harmony <- so$RNA_snn_res.0.2
+
+Idents(so) <- "coarse_clusters_malignant_harmony"
+
+
+plot_harmony(so, "coarse_clusters_malignant_harmony")
+
+plot_harmony(so, "subgroup")
+```
+
+## Compare to Cavatelli subgroups
+
+```{r, fig.width = 18, fig.height = 8}
+res <- clustify(so, 
+                ref_mat = avg_mat,
+                cluster_col = "coarse_clusters_malignant_harmony", 
+                seurat_out = FALSE) %>% 
+  cor_to_call(.) %>% 
+  left_join(rownames_to_column(so@meta.data, "cell"), .,
+            by = c("coarse_clusters_malignant_harmony" = "cluster")) %>% 
+  dplyr::select(cell, 
+                subtype_aligned = type, 
+                subtype_cor_aligned = r) %>% 
+  as.data.frame() %>% 
+  column_to_rownames("cell")
+
+so <- AddMetaData(so, res)
+a <- plot_umap(so, "subtype")
+b <- plot_umap(so, "subgroup")
+d <- plot_umap(so, "UPN")
+plot_grid(a, b, d, nrow = 1)
+```
+
+```{r}
+a <- calc_diversity(so, "UPN", "coarse_clusters_malignant")@meta.data %>% 
+  select(unaligned_cluster_diversity = entropy)
+
+b <- calc_diversity(so, "UPN", "coarse_clusters_malignant_harmony")@meta.data %>% 
+  select(aligned_cluster_diversity = entropy)
+
+so <- AddMetaData(so, cbind(a, b))
+```
+
+```{r markers of each patient sample}
+mkrs <- wilcoxauc(so, "coarse_clusters_malignant_harmony")
+
+mkrs <- filter(mkrs, 
+       logFC > 0, padj < 0.05) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC)) %>% 
+  ungroup()
+
+write_tsv(mkrs, file.path(mkrs_dir, "cluster_harmony_markers_neoplastic.tsv"))
+
+mkrs %>% 
+  split(., .$group) %>% 
+  write_markers_xlsx(.,
+                   file.path(tbls_dir, "cluster_harmony_markers_neoplastic.xlsx"))
+
+```
+
+
+
+```{r}
+qsave(so, 
+      file.path(obj_dir, "all_neoplastic.qs"), 
+      nthreads = 4)
+```
+
+

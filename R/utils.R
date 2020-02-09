@@ -6,6 +6,8 @@ library(tidyverse)
 library(readxl)
 library(here)
 library(scbp)
+library(presto)
+library(qs)
 theme_set(theme_cowplot())
 
 
@@ -22,7 +24,8 @@ doc_dir <- file.path(proj_dir, "docs")
 fig_dir <- "figs"
 mkrs_dir <- "markers"
 tbls_dir <- "tables"
-xcel_dir <- file.path(mkrs_dir, "xlsx")
-walk(c(fig_dir, mkrs_dir, tbls_dir, xcel_dir),
-     dir.create,
-     showWarnings = F)
+obj_dir <- "objects"
+walk(c(fig_dir, mkrs_dir, tbls_dir, obj_dir),
+     dir.create, showWarnings = F)
+
+out_dirs <- dplyr::lst(fig_dir, mkrs_dir, tbls_dir, obj_dir)

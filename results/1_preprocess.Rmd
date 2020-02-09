@@ -1,9 +1,9 @@
 ---
-title: "single cell basic data processing"
+title: "Data preprocessing"
 author: "Kent Riemondy RBI"
-date: "`R Sys.Date()`"
-params:
-  ncores: 4
+date: "`r Sys.Date()`"
+knit: (function(inputFile, encoding) {
+  rmarkdown::render(inputFile, encoding = encoding, output_dir = "html") })
 output:
   html_document:
     toc: true
@@ -25,22 +25,19 @@ knitr::opts_chunk$set(cache.lazy = FALSE)
 
 
 ```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
-source("../R/utils.R")
-library(future)
+source(here::here("/R/utils.R"))
 
-plan("multicore", workers = 7)
-options(future.globals.maxSize = 2 * 1024 ^ 3)
+rmd_dir <- "preprocess"
 
-proj_dir <- here()
-data_dir <- file.path(proj_dir, "data", "cellranger", "results")
-doc_dir <- file.path(proj_dir, "docs")
+fig_dir <- file.path(fig_dir, rmd_dir)
+mkrs_dir <- file.path(mkrs_dir, rmd_dir)
+tbls_dir <- file.path(tbls_dir, rmd_dir)
+obj_dir <- file.path(obj_dir, rmd_dir)
 
-fig_dir <- "figs"
-qc_figs <- file.path(fig_dir, "qc")
-mkrs_dir <- "markers"
-tbls_dir <- "tables"
-walk(c(fig_dir, mkrs_dir, tbls_dir, qc_figs),
+walk(c(fig_dir, mkrs_dir, tbls_dir, obj_dir),
      dir.create, showWarnings = F)
+
+seed_value <- 20200204
 ```
 
 # Experiment Summary
@@ -79,7 +76,6 @@ mat <- Read10X(sample_paths)
 ## General QC for library prep  {.tabset}
 
 ```{r }
-
 metrics_paths <- file.path(data_dir,
                           mdata$fq_id,
                           "outs", 
@@ -115,7 +111,6 @@ p <- map(metrics,
              x = "") +
         theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
 }) 
-
 ```
 
 ```{r, results ='asis'}
@@ -127,15 +122,11 @@ for(i in seq_along(p)){
 }
 ```
 
-
 ## Preprocessing {.tabset}
-
 
 ## Rerun preprocessing scaling, PCA, UMAP, etc. 
 
-    
 ```{r create_seurat, message = F, results = 'hide', warning = F}
-
 so <- CreateSeuratObject(
   mat,
   min.cells = 3,
@@ -179,9 +170,7 @@ so@meta.data <- get_metadata(so, embedding = NULL) %>%
   as.data.frame() %>% 
   tibble::column_to_rownames("cell")
 
-dir.create("objects", showWarnings = FALSE)
-
-saveRDS(so, file.path("objects", "unfiltered.rds"))
+saveRDS(so, file.path(obj_dir, "unfiltered.rds"))
 ```
 
 ### Percent Mitochondrial UMIs 
@@ -194,7 +183,7 @@ p <- plot_violin(so@meta.data,
   labs(x = "", y = "Percent UMIs from Mitochondria") + 
  geom_hline(aes(yintercept = 30), linetype = "dashed")
 
-save_plot(file.path(qc_figs, "prop_mito.pdf"),
+save_plot(file.path(fig_dir, "prop_mito.pdf"),
           p, base_asp = 1.75)
 p
 ```
@@ -209,7 +198,7 @@ p <- plot_violin(so@meta.data,
             .fill = "subgroup") +
   labs(x = "", y = "# of genes per cell")
 
-save_plot(file.path(qc_figs, "ngene.pdf"),
+save_plot(file.path(fig_dir, "ngene.pdf"),
           p, base_asp = 1.75)
 p
 ```
@@ -225,7 +214,7 @@ p <- plot_violin(so@meta.data,
   labs(x = "", y = "# of UMIs") + 
  geom_hline(aes(yintercept = 40000), linetype = "dashed")
 
-save_plot(file.path(qc_figs, "numi.pdf"),
+save_plot(file.path(fig_dir, "numi.pdf"),
           p, base_asp = 1.75)
 p
 ```
@@ -238,7 +227,6 @@ so@meta.data %>%
   summarize(median_percent_mito = median(percent.mt), 
             mean_percent_mito = mean(percent.mt)) %>% 
   arrange(desc(median_percent_mito))
-
 ```
 
 
@@ -260,7 +248,7 @@ for(i in seq_along(per_sample)){
 plt <- plot_grid(plotlist= p, base_asp = 1, nrow = 6, ncol = 6)
 
 
-save_plot(file.path(qc_figs, "umi_v_prop_mito.pdf"),
+save_plot(file.path(fig_dir, "umi_v_prop_mito.pdf"),
           plt,
           nrow = 6,
           ncol = 6)
@@ -286,20 +274,16 @@ for(i in seq_along(per_sample)){
 
 Suggest removing cells with > 30% mitochondrial UMIs, > 40K UMIs. 
 
-Removing sample 1008 as it only has ~45 malignant cells and is dominated by immune cells
-
 ```{r}
-so <- readRDS(file.path("objects", "unfiltered.rds"))
+so <- readRDS(file.path(obj_dir, "unfiltered.rds"))
 
 so <- subset(so, subset = percent.mt < 30)
 so <- subset(so, subset = nCount_RNA < 40000)
 so <- subset(so, subset = nCount_RNA > 500)
-so <- subset(so, subset = UPN != "1008")
 ```
 
 
 Annotate samples and assign colors to each sample. 
-
 
 ```{r}
 annots <- so@meta.data %>% 
@@ -323,10 +307,6 @@ sample_order <- annots$UPN
 
 so@meta.data$UPN <- factor(so@meta.data$UPN, levels = sample_order)
 so@meta.data$subgroup <- factor(so@meta.data$subgroup, levels = subgroup_order)
-
-# per sample cols
-col_pal <- get_distinct_cols(annots$subgroup)
-
 ```
 
 
@@ -342,41 +322,44 @@ so <- FindVariableFeatures(
   verbose = FALSE
 )
 
-so <- ScaleData(so, 
-                  vars.to.regress = c("percent.mt"), 
-                  verbose = TRUE)
+so <- ScaleData(so, verbose = TRUE)
 
 so <- RunPCA(so, 
-             npcs = 50, 
-             verbose = FALSE)
+             npcs = 40, 
+             verbose = FALSE, 
+             seed.use = seed_value)
 
 ElbowPlot(so, ndims = 50)
 
 # make graphs and use graphs for UMAP
 so <- FindNeighbors(so, 
                     reduction = "pca", 
-                    dims = 1:50, 
-                    n.neighbors = 50L)
+                    dims = 1:40, 
+                    k.param = 20L)
 
 so <- RunUMAP(so, 
               graph = "RNA_snn", 
-              min.dist = 0.4)
+              min.dist = 0.4, 
+              seed.use = seed_value)
 
 so <- FindClusters(so, 
-                   resolution = c(0.1, 0.3, 0.5))
+                   resolution = c(0.1, 0.2, 0.3, 0.5),
+                   random.seed = seed_value)
 
 so$coarse_clusters <- so$RNA_snn_res.0.1
 
 Idents(so) <- "coarse_clusters"
-
 ```
 
 ```{r}
 plot_umap(so, "subgroup", 
-          .col = scbp:::palette_OkabeIto, 
+          .col = palette_OkabeIto, 
           label_text = TRUE, 
           label_col = "black",
           sorted = "random")
+```
+
+```{r}
 plot_umap(so, "coarse_clusters", label_text = TRUE, label_col = "black")
 plot_umap(so, "UPN", 
           label_text = TRUE, 
@@ -384,29 +367,249 @@ plot_umap(so, "UPN",
           sorted = "random")
 ```
 
+## markers 
 
+```{r}
+mkrs <- wilcoxauc(so, "coarse_clusters")
+
+mkrs <- filter(mkrs, 
+       logFC > 0, padj < 0.05) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC)) %>% 
+  ungroup()
+
+write_tsv(mkrs, file.path(mkrs_dir, "coarse_cluster_markers_all_data_unfiltered.tsv"))
+
+mkrs %>% 
+  split(., .$group) %>% 
+  write_markers_xlsx(.,
+                   file.path(tbls_dir, "coarse_cluster_markers_all_data_unfiltered.xlsx"))
+```
+
+```{r, fig.width = 20, fig.height= 20}
+topx <- mkrs %>% 
+  filter(logFC > 0, padj < 0.05) %>% 
+  mutate(group = as.factor(as.integer(group))) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC)) %>% 
+  slice(1:10)
+
+p <- DotPlot(so, 
+        features = unique(topx$feature),
+        group.by = "coarse_clusters") +
+  coord_flip() +
+  labs(x = "Cluster",
+       y = "")
+
+p
+
+save_plot(file.path(fig_dir, 
+                    "coarse_cluster_marker_dotplot_unfiltered.pdf"), 
+          p, base_height = 24, base_asp = 1)
+```
+
+
+```{r}
+so <- calc_diversity(so, "UPN", "coarse_clusters")
+
+so$cdiversity <- so$entropy
+so$entropy <- NULL
+
+p <- plot_umap(so, "cdiversity", legend_title = "cluster\ndiversity")
+
+save_plot(file.path(fig_dir, "cluster_diversity_unfiltered.pdf"), p, base_asp = 1.2)
+
+p
+```
+
+```{r}
+plot_umap(so, "coarse_clusters", label_text = TRUE)
+```
+
+```{r}
+plot_umap(so, "UPN")
+```
+
+
+## Annotate coarse cell types
+
+```{r}
+cids <- as.numeric(as.character(so$coarse_clusters)) %>% unique() %>% sort()
+
+new_ids <- c(
+  "13" = "lymphocytes",
+  "1" = "macrophage_monocytes",
+  "15" ="oligodendrocytes_astrocytes_other",
+  "5" = "lymphocytes"
+)
+others <- setdiff(cids, names(new_ids))
+other_ids <- rep("malignant", length(others))
+names(other_ids) <- as.character(others)
+
+new_ids <- c(new_ids, other_ids)
+
+so$coarse_cell_type <- new_ids[as.character(so$coarse_clusters)]
+
+plot_umap(so, "coarse_cell_type", .cols = palette_OkabeIto)
+```
+
+
+
+```{r}
+
+to_plot <- c(
+  "UPN",
+  "coarse_clusters",
+  "coarse_cell_type",
+  "subgroup",
+  "cdiversity"
+) 
+
+pals <- list(
+  NULL,
+  NULL,
+  palette_OkabeIto,
+  palette_OkabeIto,
+  NULL
+)
+
+plts <- map2(to_plot, pals,
+    ~plot_umap(so, .x, .cols = .y))
+
+plts
+```
+
+
+```{r}
+p <- plot_cell_proportions(so, 
+                      group_id = "coarse_cell_type",
+                      facet_by = "subgroup", 
+                      cols = rev(palette_OkabeIto[1:4])) +
+  labs(fill = "", x = "")
+
+p
+
+save_plot(file.path(fig_dir, "cell_proportion_no_filtering.pdf"), 
+          p, 
+          base_asp = 2)
+```
+
+## refilter to exclude poor samples
+
+Removing sample 1008 as it only has ~45 malignant cells and is dominated by immune cells, same with 1192 from the WNTs. 1202 appears to be a sample swap as it has a lot of SHH character and inferCNV results do not match the methylation data. Excluding
+
+```{r}
+to_drop <- c("1008", "1192", "1202")
+to_keep <- colnames(so)[which(!so@meta.data$orig.ident %in% to_drop)]
+so <- subset(so, cells = to_keep)
+```
+
+
+Annotate samples and assign colors to each sample. 
+
+```{r}
+annots <- so@meta.data %>% 
+  select(UPN, subgroup) %>% 
+  unique() %>%
+  arrange(subgroup)
+
+subgroup_order <- c(
+  "SHH",
+  "GP3",
+  "GP3/4",
+  "GP4",
+  "WNT"
+)
+
+annots <- mutate(annots, subgroup = factor(subgroup, levels = subgroup_order))
+
+annots <- annots %>% arrange(subgroup, as.numeric(UPN))
+
+sample_order <- annots$UPN 
+
+so@meta.data$UPN <- factor(so@meta.data$UPN, levels = sample_order)
+so@meta.data$subgroup <- factor(so@meta.data$subgroup, levels = subgroup_order)
+```
+
+
+## Normalize and reembed into 2D with UMAP
+
+```{r}
+so <- NormalizeData(so)
+
+so <- FindVariableFeatures(
+  so,
+  selection.method = "vst",
+  nfeatures = 4000,
+  verbose = FALSE
+)
+
+so <- ScaleData(so, 
+                vars.to.regress = "percent.mt", 
+                verbose = TRUE)
+
+so <- RunPCA(so, 
+             npcs = 40, 
+             verbose = FALSE, 
+             seed.use = seed_value)
+
+ElbowPlot(so, ndims = 50)
+
+# make graphs and use graphs for UMAP
+so <- FindNeighbors(so, 
+                    reduction = "pca", 
+                    dims = 1:40, 
+                    k.param = 20L)
+
+so <- RunUMAP(so, 
+              graph = "RNA_snn", 
+              min.dist = 0.4, 
+              seed.use = seed_value)
+
+so <- FindClusters(so, 
+                   resolution = c(0.1, 0.2, 0.3, 0.5),
+                   random.seed = seed_value)
+
+so$coarse_clusters <- so$RNA_snn_res.0.1
+
+Idents(so) <- "coarse_clusters"
+```
+
+```{r}
+plot_umap(so, 
+          "subgroup", 
+          .col = palette_OkabeIto, 
+          label_text = TRUE, 
+          label_col = "black",
+          sorted = "random")
+```
+
+```{r}
+plot_umap(so, "coarse_clusters", 
+          label_text = TRUE, label_col = "black")
+plot_umap(so, "UPN", 
+          label_text = TRUE, 
+          label_col = "black", 
+          sorted = "random")
+```
 
 ## markers 
 
 ```{r}
-library(presto)
 mkrs <- wilcoxauc(so, "coarse_clusters")
 
-filter(mkrs, 
+mkrs <- filter(mkrs, 
        logFC > 0, padj < 0.05) %>% 
   group_by(group) %>% 
   arrange(padj, desc(logFC)) %>% 
-write_tsv(file.path(mkrs_dir, "coarse_cluster_markers_all_data.tsv"))
+  ungroup()
 
-filter(mkrs, 
-       logFC > 0, padj < 0.05) %>% 
-  group_by(group) %>% 
-  arrange(padj, desc(logFC)) %>% 
-  ungroup() %>% 
+write_tsv(mkrs, file.path(mkrs_dir, "coarse_cluster_markers_all_data.tsv"))
+
+mkrs %>% 
   split(., .$group) %>% 
-scbp::write_markers_xlsx(.,
-                   file.path(xcel_dir, "coarse_cluster_markers_all_data.xlsx"))
-
+  write_markers_xlsx(.,
+                   file.path(tbls_dir, "coarse_cluster_markers_all_data.xlsx"))
 ```
 
 ```{r, fig.width = 20, fig.height= 20}
@@ -440,12 +643,15 @@ so$entropy <- NULL
 
 p <- plot_umap(so, "cdiversity", legend_title = "cluster\ndiversity")
 
-save_plot(file.path(qc_figs, "cluster_diversity.pdf"), p, base_asp = 1.2, )
+save_plot(file.path(fig_dir, "cluster_diversity.pdf"), p, base_asp = 1.2)
+
+p
 ```
 
 ```{r}
-plot_umap(so, "coarse_clusters")
+plot_umap(so, "coarse_clusters", label_text = TRUE)
 ```
+
 ```{r}
 plot_umap(so, "UPN")
 ```
@@ -454,33 +660,12 @@ plot_umap(so, "UPN")
 ## Annotate coarse cell types
 
 ```{r}
-new_ids <- c(
- "0" = "malignant",
- "1" = "malignant",
- "2" = "malignant",
- "3" = "macrophage_monocytes", 
- "4" = "malignant",
- "5" = "malignant",
- "6" = "malignant",
- "7" = "malignant",
- "8" = "malignant",
- "9" = "malignant",
- "10" = "malignant",
- "11" = "lymphocytes", 
- "12" = "malignant",
- "13" = "malignant",
- "14" = "oligodendrocytes_astrocytes_other",
- "15" = "malignant",
- "16" = "malignant"
- )
-
 cids <- as.numeric(as.character(so$coarse_clusters)) %>% unique() %>% sort()
 
 new_ids <- c(
-  "10" = "lymphocytes",
-  "0" = "macrophage_monocytes",
-  "14" ="oligodendrocytes_astrocytes_other",
-  "18" = "macrophage_monocytes"
+  "11" = "lymphocytes",
+  "3" = "macrophage_monocytes",
+  "15" ="oligodendrocytes_astrocytes_other"
 )
 others <- setdiff(cids, names(new_ids))
 other_ids <- rep("malignant", length(others))
@@ -490,20 +675,18 @@ new_ids <- c(new_ids, other_ids)
 
 so$coarse_cell_type <- new_ids[as.character(so$coarse_clusters)]
 
-plot_umap(so, "coarse_cell_type", .cols = scbp:::palette_OkabeIto)
+plot_umap(so, "coarse_cell_type", .cols = palette_OkabeIto)
 ```
 
 
 
 ```{r}
-
 to_plot <- c(
   "UPN",
   "coarse_clusters",
   "coarse_cell_type",
   "subgroup",
-  "cdiversity",
-  "csamples"
+  "cdiversity"
 ) 
 
 pals <- list(
@@ -511,7 +694,6 @@ pals <- list(
   NULL,
   palette_OkabeIto,
   palette_OkabeIto,
-  NULL,
   NULL
 )
 
@@ -519,18 +701,33 @@ plts <- map2(to_plot, pals,
     ~plot_umap(so, .x, .cols = .y))
 
 plts
+```
 
 
+```{r}
+p <- plot_cell_proportions(so, 
+                      group_id = "coarse_cell_type",
+                      facet_by = "subgroup", 
+                      cols = rev(palette_OkabeIto[1:4])) +
+  labs(fill = "", x = "")
+
+p
+
+save_plot(file.path(fig_dir, "cell_proportions.pdf"), 
+          p, 
+          base_asp = 2)
 ```
 
 ## Write out data
 
 ```{r} 
-saveRDS(so, file.path("objects", "so.rds"))
+qsave(so, file.path(obj_dir, "so.qs"), nthreads = 4)
 
 mdata_out <- get_metadata(so)
 outname <- file.path("tables", 
-                     paste0("metadata_", format(Sys.Date(), "%Y_%m_%d"), ".tsv.gz"))
+                     paste0("metadata_", 
+                            format(Sys.Date(), "%Y_%m_%d"),
+                            ".tsv.gz"))
 write_tsv(mdata_out, outname)
 
 ```
@@ -538,7 +735,8 @@ write_tsv(mdata_out, outname)
 ## Get top PC genes
 
 ```{r}
-so <- readRDS(file.path("objects", "so.rds"))
+so <- qread(file.path(obj_dir, "so.qs"), nthreads = 4)
+
 to_plot <- c("UPN", "coarse_cell_type", "subgroup")
 
 dims_to_plot <- list(

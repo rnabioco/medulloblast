@@ -1,17 +1,27 @@
 ---
 title: "PyScenic"
 author: "Kent Riemondy RBI"
-date: "10/3/2019"
-output: html_document
+date: "`r Sys.Date()`"
+knit: (function(inputFile, encoding) {
+  rmarkdown::render(inputFile, encoding = encoding, output_dir = "html") })
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_collapsed: false
+    theme: cosmo
+    highlight: tango
+    fig_caption: true
+    code_folding: hide
+    df_print: paged
 ---
-
-
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
-source("../R/utils.R")
+source(here::here("R/utils.R"))
+library(presto)
 ```
 
 Ran on bodhi (see [python script](../data/pyscenic/pyscenic_analysis.py))
@@ -19,16 +29,16 @@ Ran on bodhi (see [python script](../data/pyscenic/pyscenic_analysis.py))
 ```{r}
 data_dir <- "../data/pyscenic/"
 grp34_data <- read_csv(file.path(data_dir, 
-                                 "output_grp34/auc_res.csv"))
+                                 "output_gp34/auc_res.csv"))
 
 shh_data <- read_csv(file.path(data_dir, 
-                               "output_shh2/auc_res.csv"))
+                               "output_shh/auc_res.csv"))
 ```
 
 ## SHH dataset
 
 ```{r}
-so <- readRDS("objects/shh.rds")
+so <- readRDS(file.path(obj_dir, "shh", "shh.rds"))
 
 shh_data <- shh_data %>%
   as.data.frame() %>%
@@ -42,26 +52,30 @@ so[["TF"]] <- CreateAssayObject(data = shh_data)
 Idents(so) <- "coarse_clusters_shh_harmony"
 DefaultAssay(so) <- "TF"
 
-so_tf_markers <- FindAllMarkers(so, 
-                                assay = "TF", 
-                                logfc.threshold = 0, 
-                                only.pos = TRUE)
+so_tf_markers <- wilcoxauc(so,
+                           group_by = "coarse_clusters_shh_harmony", 
+                           seurat_assay = "TF") %>% 
+  filter(logFC > 0, 
+         padj < 0.05) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC))
 
-write_tsv(so_tf_markers, "tables/shh_tf_activities.tsv")
-write_markers_xlsx(split(so_tf_markers, so_tf_markers$cluster),
-                   path ="tables/shh_tf_activities.xlsx",
+write_tsv(so_tf_markers, file.path(tbls_dir, "shh_tf_activities.tsv"))
+
+write_markers_xlsx(split(so_tf_markers, so_tf_markers$group),
+                   path = file.path(tbls_dir,"shh_tf_activities.xlsx"),
                    description_string = "Transcription factor regulons derived from PyScenic that are significantly enriched in each cluster")
 
 topx <- so_tf_markers %>% 
-  group_by(cluster) %>% 
-  arrange(p_val_adj, .by_group = TRUE) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC), .by_group = TRUE) %>% 
   slice(1:5)
 
 so <- ScaleData(so)
 
 p <- DoHeatmap(so, 
                group.colors = discrete_palette_default,
-        features = unique(topx$gene),
+        features = unique(topx$feature),
         group.by = "coarse_clusters_shh_harmony",
         angle = 0, 
         raster = FALSE, 
@@ -76,15 +90,20 @@ save_plot(file.path(fig_dir, "heatmap_tfs_shh.pdf"),
           base_asp = 2,
           base_height = 8)
 
-#DefaultAssay(so) <- "RNA"
-#saveRDS(so, "objects/shh.rds")
+```
+
+resave 
+
+```{r}
+DefaultAssay(so) <- "RNA"
+saveRDS(so, file.path(obj_dir, "shh", "shh.rds"))
 ```
 
 
 ## Group 3 and Group 4 dataset
 
 ```{r}
-so <- readRDS("objects/gp34.rds")
+so <- readRDS(file.path(obj_dir,"gp34", "gp34.rds"))
 
 grp34_data <- grp34_data %>%
   as.data.frame() %>%
@@ -97,26 +116,31 @@ so[["TF"]] <- CreateAssayObject(data = grp34_data)
 
 Idents(so) <- "coarse_clusters_gp34_harmony"
 DefaultAssay(so) <- "TF"
-so_tf_markers <- FindAllMarkers(so, 
-               assay = "TF", 
-               logfc.threshold = 0, 
-               only.pos = TRUE)
 
-write_tsv(so_tf_markers, "tables/gp34_tf_activities.tsv")
-write_markers_xlsx(split(so_tf_markers, so_tf_markers$cluster),
-                   path ="tables/gp34_tf_activities.xlsx",
+so_tf_markers <- wilcoxauc(so,
+                           group_by = "coarse_clusters_gp34_harmony", 
+                           seurat_assay = "TF") %>% 
+  filter(logFC > 0, 
+         padj < 0.05) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC))
+
+write_tsv(so_tf_markers, file.path(tbls_dir, "gp34_tf_activities.tsv"))
+
+write_markers_xlsx(split(so_tf_markers, so_tf_markers$group),
+                   path = file.path(tbls_dir,"gp34_tf_activities.xlsx"),
                    description_string = "Transcription factor regulons derived from PyScenic that are significantly enriched in each cluster")
 
 topx <- so_tf_markers %>% 
-  group_by(cluster) %>% 
-  arrange(p_val_adj, .by_group = TRUE) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC), .by_group = TRUE) %>% 
   slice(1:5)
 
 so <- ScaleData(so)
 
 p <- DoHeatmap(so, 
                group.colors = discrete_palette_default,
-        features = unique(topx$gene),
+        features = unique(topx$feature),
         group.by = "coarse_clusters_gp34_harmony",
         angle = 0,
         raster = FALSE, 
@@ -131,9 +155,11 @@ save_plot(file.path(fig_dir, "heatmap_tfs_gp34.pdf"),
           base_asp = 2,
           base_height = 8)
 
+```
 
-#DefaultAssay(so) <- "RNA"
+```{r}
+DefaultAssay(so) <- "RNA"
 
-#saveRDS(so, "objects/gp34.rds")
+saveRDS(so, file.path(obj_dir, "gp34", "gp34.rds"))
 ```
 
