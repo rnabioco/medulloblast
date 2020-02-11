@@ -38,7 +38,7 @@ shh_data <- read_csv(file.path(data_dir,
 ## SHH dataset
 
 ```{r}
-so <- readRDS(file.path(obj_dir, "shh", "shh.rds"))
+so <- qread(file.path(obj_dir, "shh", "shh.qs"), use_alt_rep = FALSE)
 
 shh_data <- shh_data %>%
   as.data.frame() %>%
@@ -96,14 +96,14 @@ resave
 
 ```{r}
 DefaultAssay(so) <- "RNA"
-saveRDS(so, file.path(obj_dir, "shh", "shh.rds"))
+qsave(so, file.path(obj_dir, "shh", "shh.qs"), nthreads = 4)
 ```
 
 
 ## Group 3 and Group 4 dataset
 
 ```{r}
-so <- readRDS(file.path(obj_dir,"gp34", "gp34.rds"))
+so <- qread(file.path(obj_dir,"gp34", "gp34.qs"), nthreads = 4, use_alt_rep = FALSE)
 
 grp34_data <- grp34_data %>%
   as.data.frame() %>%
@@ -160,6 +160,6 @@ save_plot(file.path(fig_dir, "heatmap_tfs_gp34.pdf"),
 ```{r}
 DefaultAssay(so) <- "RNA"
 
-saveRDS(so, file.path(obj_dir, "gp34", "gp34.rds"))
+qsave(so, file.path(obj_dir, "gp34", "gp34.qs"), nthreads = 4)
 ```
 

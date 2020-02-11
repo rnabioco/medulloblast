@@ -129,12 +129,12 @@ plot_harmony(so, "coarse_clusters_shh_harmony")
 
 ```{r markers of each subgroup}
 
-mkrs <- wilcoxauc(so, "coarse_clusters_shh_harmony")
+full_mkrs <- wilcoxauc(so, "coarse_clusters_shh_harmony")
 
-mkrs %>% 
+full_mkrs %>% 
   write_tsv(file.path(mkrs_dir, "harmony_markers_shh_all.tsv"))
 
-mkrs <- filter(mkrs, logFC > 0, padj < 0.05) %>% 
+mkrs <- filter(full_mkrs, logFC > 0, padj < 0.05, pct_in > 0.10) %>% 
   group_by(group) %>% 
   arrange(padj, desc(logFC), .by_group = TRUE)
 
@@ -343,13 +343,35 @@ tibble(pc = str_c("PC", 1:length(so@reductions$pca@stdev)),
 plot_harmony(so, 
              "coarse_clusters_shh_harmony")
 
-avg_tbl_dir <- file.path(tbls_dir, "avg_expr", "shh")
-dir.create(avg_tbl_dir, recursive = TRUE)
 
 write_avg_expr(so,  
                "coarse_clusters_shh_harmony",
-               file.path(avg_tbl_dir, 
-                         "avgexpr.tsv.gz"))
+               file.path(tbls_dir, 
+                         "coarse_clusters_avgexpr.tsv.gz"))
+
+
+cell_count_mat <- get_cell_count_matrix(so, "UPN", "coarse_clusters_shh_harmony")
+
+cell_count_mat[is.na(cell_count_mat)] <- 0L
+
+cell_count_mat %>% 
+  tibble::rownames_to_column("UPN") %>% 
+write_csv(file.path(tbls_dir, 
+                         "coarse_clusters_shh_harmony_cell_counts.csv"))
+
+
+full_marker_matrix <- full_mkrs %>% 
+  top_marker_matrix(.) 
+  
+topn_marker_matrix <- full_mkrs %>% 
+  top_marker_matrix(n = 200) 
+
+out <- list(avg_expression = read_tsv(file.path(tbls_dir, "coarse_clusters_avgexpr.tsv.gz")),
+     logFC_all = full_marker_matrix,
+     top_200_logFC = topn_marker_matrix)
+
+openxlsx::write.xlsx(out, 
+                     file.path(tbls_dir, "coarse_clusters_shh_harmony_expression_logfc_summaries.xlsx"))
 ```
 
 
@@ -419,5 +441,5 @@ qsave(so, file.path(obj_dir, "shh.qs"), nthreads = 4)
 ```
 
 ```{r, eval = FALSE}
-so <- qread(file.path(obj_dir, "shh.qs"), nthreads = 4)
+so <- qread(file.path(obj_dir, "shh.qs"), nthreads = 4, use_alt_rep = FALSE)
 ```

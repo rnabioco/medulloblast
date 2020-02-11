@@ -30,15 +30,13 @@ cb_outdir <- "cellbrowser"
 
 def_embeddings <- function(so) {str_subset(names(so@reductions), "umap")}
 
-qread <- function(file, ...) {qs::qread(file, ..., nthreads = 4)}
+qread <- function(file, ...) {qs::qread(file, ..., nthreads = 4, use_alt_rep = FALSE)}
 ```
 
 # All cells
 
 
 ```{r}
-so <- qread(file.path("objects", "preprocess", "so.qs"),
-            nthreads = 4)
 so <- qread(file.path("objects", "preprocess", "so.qs"))
 
 cols_to_keep <- c(
@@ -63,8 +61,14 @@ make_cellbrowser(so,
                  marker_file = "markers/preprocess/coarse_cluster_markers_all_data.tsv",
                  ident = "clusters",
                  embeddings = def_embeddings(so),
-                 skip_expr_matrix = FALSE
+                 skip_expr_matrix = TRUE,
+                 config = list(priority = 1,  
+                               radius = 2),
+                 description = list(    
+                   title = "Medulloblastoma",
+                   description = "Full dataset, includes all cells."
                  )
+)
 ```
 
 
@@ -79,6 +83,7 @@ cols_to_keep <- c(
   `percent of UMIs as mitochondria` = "percent.mt",
   `unaligned_clusters` = "coarse_clusters_malignant",
   `aligned_clusters` = "coarse_clusters_malignant_harmony",
+  `other_sample_info` = "additional_info",
   `subgroup` = "subgroup",
   `subtype` = "subtype",
   `subtype_aligned` = "subtype_aligned",
@@ -94,10 +99,18 @@ make_cellbrowser(so,
                  project = "medulloblastoma_neoplastic",
                  outdir = cb_outdir,
                  marker_file = "markers/preprocess/upn_markers_neoplastic.tsv",
-                 ident = "unaligned_clusters",
+                 ident = "UPN",
                  embeddings = def_embeddings(so),
-                 skip_expr_matrix = FALSE
+                 skip_expr_matrix = TRUE,
+                 config = list(priority = 2,  
+                               radius = 2),
+                 description = list(    
+                   title = "Medulloblastoma Neoplastic cells",
+                   description = "Only neoplastic cells are shown, includes WNT subgroup. There are both unaligned and aligned projections"
                  )
+)
+
+gc()
 ```
 
 
@@ -114,6 +127,7 @@ cols_to_keep <- c(
   `clusters_aligned` = "coarse_clusters_shh_harmony",
   `subtype` = "subtype",
   `UPN` = "UPN",
+  `other_sample_info` = "additional_info",
    cell_type = "coarse_cell_type",
    `cell cycle phase` = "Phase",
   "Northcutt_SHH-A-cell_cycle" = "SHH-A-cell_cycle",
@@ -125,7 +139,7 @@ cols_to_keep <- c(
   aligned_cluster_diversity = "aligned_cluster_diversity"
   )
 
-so <- RunALRA(so,  setDefaultAssay = FALSE)
+#so <- RunALRA(so,  setDefaultAssay = FALSE)
 
 make_cellbrowser(so, 
                  column_list = cols_to_keep,
@@ -139,8 +153,15 @@ make_cellbrowser(so,
                  marker_file = "markers/shh/harmony_markers_shh.tsv",
                  ident = "clusters_aligned",
                  embeddings = def_embeddings(so),
-                 skip_expr_matrix = FALSE, 
-                 assays = c("ALRA_" = "alra")
+                 skip_expr_matrix = TRUE, 
+                 assays = c("ALRA_" = "alra"),
+                  config = list(priority = 3,  
+                               radius = 2),
+                 description = list(    
+                   title = "Medulloblastoma SHH subgroup",
+                   description = "Neoplastic cells from SHH subgroup.
+                   There are both unaligned and aligned projections"
+                 )
 )
 ```
 
@@ -161,6 +182,7 @@ cols_to_keep <- c(
   `subtype` = "subtype",
   `Dx` = "Dx",
   `UPN` = "UPN",
+  `other_sample_info` = "additional_info",
    cell_type = "coarse_cell_type",
    `cell cycle phase` = "Phase",
   "Northcutt_Group 3/4-A-cell_cycle" = "Group 3/4-A-cell_cycle",
@@ -171,7 +193,7 @@ cols_to_keep <- c(
   unaligned_cluster_diversity = "unaligned_cluster_diversity", 
   aligned_cluster_diversity = "aligned_cluster_diversity")
 
-so <- RunALRA(so, setDefaultAssay = FALSE)
+#so <- RunALRA(so, setDefaultAssay = FALSE)
 gc()
 make_cellbrowser(so, 
                  column_list = cols_to_keep,
@@ -185,8 +207,14 @@ make_cellbrowser(so,
                  marker_file = "markers/gp34/harmony_markers_gp34.tsv",
                  ident = "clusters_aligned",
                  embeddings = def_embeddings(so),
-                 skip_expr_matrix = FALSE,
-                assays = c("ALRA_" = "alra")
+                 skip_expr_matrix = TRUE,
+                assays = c("ALRA_" = "alra"),
+                  config = list(priority = 4),
+                 description = list(    
+                   title = "Medulloblastoma Group 3, 3+4, and 4 subgroups",
+                   description = "Neoplastic cells from group3/4 subgroups.
+                   There are both unaligned and aligned projections"
+                 )
 )
 ```
 
@@ -207,6 +235,7 @@ cols_to_keep <- c(
   `subtype` = "subtype",
   `Dx` = "Dx",
   `UPN` = "UPN",
+    `other_sample_info` = "additional_info",
    `cell cycle phase` = "Phase",
    "Northcutt_Group 3/4-A-cell_cycle" = "Group 3/4-A-cell_cycle",
    "Northcutt_Group 3/4-B-Translation_Myc" = "Group 3/4-B-Translation_Myc",
@@ -216,8 +245,8 @@ cols_to_keep <- c(
   unaligned_cluster_diversity = "unaligned_cluster_diversity", 
   aligned_cluster_diversity = "aligned_cluster_diversity")
 
-so <- RunALRA(so,  setDefaultAssay = FALSE)
-gc()
+#so <- RunALRA(so,  setDefaultAssay = FALSE)
+#gc()
 
 scbp::make_cellbrowser(so, 
                  column_list = cols_to_keep,
@@ -231,8 +260,14 @@ scbp::make_cellbrowser(so,
                  marker_file = "markers/gp34/harmony_markers_gp3_only.tsv",
                  ident = "clusters_aligned",
                  embeddings = def_embeddings(so),
-                 skip_expr_matrix = FALSE,
-                 assays = c("ALRA_" = "alra")
+                 skip_expr_matrix = TRUE,
+                 assays = c("ALRA_" = "alra"),
+                   config = list(priority = 5),
+                 description = list(    
+                   title = "Medulloblastoma Group 3 subgroup",
+                   description = "Neoplastic cells from group3 subgroup.
+                   There are both unaligned and aligned projections"
+                 )
 )
 ```
 
@@ -253,6 +288,7 @@ cols_to_keep <- c(
   `subgroup` = "subgroup",
   `subtype` = "subtype",
   `Dx` = "Dx",
+  `other_sample_info` = "additional_info",
   `UPN` = "UPN",
    `cell cycle phase` = "Phase",
    "Northcutt_Group 3/4-A-cell_cycle" = "Group 3/4-A-cell_cycle",
@@ -263,7 +299,7 @@ cols_to_keep <- c(
   unaligned_cluster_diversity = "unaligned_cluster_diversity", 
   aligned_cluster_diversity = "aligned_cluster_diversity")
 
-so <- RunALRA(so,  setDefaultAssay = FALSE)
+#so <- RunALRA(so,  setDefaultAssay = FALSE)
 
 make_cellbrowser(so, 
                  column_list = cols_to_keep,
@@ -277,8 +313,14 @@ make_cellbrowser(so,
                  marker_file = "markers/gp34/harmony_markers_gp4_only.tsv",
                  ident = "clusters_aligned",
                  embeddings = def_embeddings(so),
-                 skip_expr_matrix = FALSE,
-                 assays = c("ALRA_" = "alra")
+                 skip_expr_matrix = TRUE,
+                 assays = c("ALRA_" = "alra"),
+                config = list(priority = 6),
+                 description = list(    
+                   title = "Medulloblastoma Group 4 subgroup",
+                   description = "Neoplastic cells from group4 subgroup.
+                   There are both unaligned and aligned projections"
+                 )
 )
 ```
 
@@ -289,7 +331,7 @@ make_cellbrowser(so,
 
 
 ```{r}
-so <- readRDS(file.path("objects", "immune", "immune_so.rds"))
+so <- qread(file.path("objects", "immune", "immune_so.qs"))
 
 # dont use commas in cluster ids
 so$new_cell_type_ids <- str_remove(so$new_cell_type_ids, ",")
@@ -300,14 +342,15 @@ cols_to_keep <- c(
   `percent of UMIs as mitochondria` = "percent.mt",
   `clusters` = "fine_immune_clusters",
   `subgroup` = "subgroup",
-  #`Dx` = "Dx",
+  `other_sample_info` = "additional_info",
   `UPN` = "UPN",
  # cell_type_fine = "fine_cell_type_ids",
   new_cell_type_fine = "new_cell_type_ids",
+ new_cell_type_short_label = "new_cell_type_ids_short",
   hpca_cell_type_coarse = "hpca_cell_types",
   hpca_cell_type_fine = "hpca_fine_cell_types")
 
-so <- RunALRA(so,  setDefaultAssay = FALSE)
+#so <- RunALRA(so,  setDefaultAssay = FALSE)
 
 make_cellbrowser(so, 
                  column_list = cols_to_keep,
@@ -319,15 +362,21 @@ make_cellbrowser(so,
                  marker_file = "markers/immune/immune_subset_cluster_markers.tsv",
                  ident = "clusters",
                  embeddings = def_embeddings(so),
-                 skip_expr_matrix = FALSE,
-                 assays = c("ALRA_" = "alra")
+                 skip_expr_matrix = TRUE,
+                 assays = c("ALRA_" = "alra"),
+                 config = list(priority = 7),
+                 description = list(    
+                   title = "Medulloblastoma immune populations",
+                   description = "Myleoid and lymphocytes populations from all subgroups.
+                   There is only an unaligned projection, as alignment was not necessary"
+                 )
 )
 ```
 
 
 # Mouse model (SHH)
 
-```{r}
+```{r, eval = FALSE}
 so <- readRDS( file.path("objects",
                   "mouse_models",
                   "shh_model_sobj.rds"))
@@ -365,7 +414,7 @@ make_cellbrowser(so,
 
 # Mouse model (Gp34)
 
-```{r}
+```{r, eval = FALSE}
 so <- readRDS(file.path("objects",
                   "mouse_models",
                   "mb_models_sobj.rds"))
@@ -415,9 +464,7 @@ datasets <- c(
    "medulloblastoma_neoplastic/cellbrowser.conf",
    "medulloblastoma_neoplastic_shh/cellbrowser.conf",
    "medulloblastoma_neoplastic_gp34/cellbrowser.conf",
-#   # "medulloblastoma_gp34_mouse_models/cellbrowser.conf",
-#   # "medulloblastoma_shh_mouse_model/cellbrowser.conf",
-#    "medulloblastoma_immune/cellbrowser.conf",
+    "medulloblastoma_immune/cellbrowser.conf",
     "medulloblastoma_neoplastic_gp3_only/cellbrowser.conf",
     "medulloblastoma_neoplastic_gp4_only/cellbrowser.conf"
 )

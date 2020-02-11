@@ -64,18 +64,47 @@ so <- RunPCA(so, npcs = 40, verbose = FALSE, seed.use = seed_value)
 
 so <- FindNeighbors(so,
                     reduction = "pca",
-                    dims = 1:20,
+                    dims = 1:30,
                     k.param = 20)
 
 so <- RunUMAP(so, graph = "RNA_snn", seed.use = seed_value)
 
-
 so <- FindClusters(so, 
                    random.seed = seed_value,
                    resolution = c(0.4, 0.3, 0.25, 0.2, 0.1, 0.05))
+```
 
 
-so$fine_immune_clusters <- so$RNA_snn_res.0.4
+```{r}
+to_plot <- c(
+  "CD79A",
+  "CD3G",
+  "CCL3",
+  "S100A9",
+  "FCER1A",
+  "NAV3",
+  "FOXP3",
+  "MKI67",
+  "SEZ6L2"
+)
+
+plot_umap(so, to_plot) %>% 
+  plot_grid(plotlist = ., 
+            nrow = 3,
+            ncol = 3)
+```
+
+```{r}
+plot_umap(so, 
+          str_subset(colnames(so@meta.data), "res")) %>% 
+  plot_grid(plotlist = ., 
+            nrow = 2,
+            ncol = 3)
+```
+
+
+```{r}
+so$fine_immune_clusters <- so$RNA_snn_res.0.3
 
 clusters <- so$fine_immune_clusters
 
@@ -93,6 +122,99 @@ p
 save_plot(file.path(fig_dir, "umap_by_upn.pdf"), p, base_asp = 1.2)
 ```
 
+## Remove patient specific cluster
+
+
+````{r}
+so <- calc_diversity(so, sample_id = "orig.ident", group_id = "fine_immune_clusters")
+
+plot_umap(so, "entropy")
+```
+
+Remove cluster 3 and reembed
+
+```{r}
+so <- subset(so, subset = fine_immune_clusters != "3")
+
+so <- FindVariableFeatures(so, 
+                           selection.method = "vst", 
+                           nfeatures = 3000, 
+                           verbose = FALSE)
+
+so <- ScaleData(so, 
+                vars.to.regress = c("percent.mt", "nCount_RNA"), 
+                verbose = TRUE)
+
+so <- RunPCA(so, npcs = 40, verbose = FALSE, seed.use = seed_value)
+
+so <- FindNeighbors(so,
+                    reduction = "pca",
+                    dims = 1:30,
+                    k.param = 20)
+
+#so <- RunUMAP(so, dims = 1:30, graph = "RNA_snn", seed.use = seed_value)
+so <- RunUMAP(so, dims = 1:30, seed.use = seed_value)
+
+so <- FindClusters(so, 
+                   random.seed = seed_value,
+                   resolution = c(0.4, 0.3, 0.25, 0.2, 0.1, 0.05))
+```
+
+
+```{r}
+to_plot <- c(
+  "CD79A",
+  "CD3G",
+  "CCL3",
+  "S100A9",
+  "FCER1A",
+  "NAV3",
+  "FOXP3",
+  "MKI67",
+  "SEZ6L2"
+)
+
+p <- plot_umap(so, to_plot) %>% 
+  plot_grid(plotlist = ., 
+            nrow = 3,
+            ncol = 3)
+
+p
+save_plot(file.path(fig_dir, "umap_marker_summary.pdf"), 
+          p,
+          nrow = 3, 
+          ncol = 3,
+          base_asp = 1.2)
+
+```
+
+```{r}
+plot_umap(so, 
+          str_subset(colnames(so@meta.data), "res")) %>% 
+  plot_grid(plotlist = ., 
+            nrow = 2,
+            ncol = 3)
+```
+
+
+```{r}
+so$fine_immune_clusters <- so$RNA_snn_res.0.3
+
+clusters <- so$fine_immune_clusters
+
+p <- plot_umap(so, "fine_immune_clusters", label_text = TRUE)
+p
+save_plot(file.path(fig_dir, "umap_by_clusters.pdf"),
+                     p, base_asp = 1.4)
+
+p <- plot_umap(so, "subgroup")
+p
+save_plot(file.path(fig_dir, "umap_by_subgroup.pdf"), p, base_asp = 1.2)
+
+p <- plot_umap(so, "UPN")
+p
+save_plot(file.path(fig_dir, "umap_by_upn.pdf"), p, base_asp = 1.2)
+```
 
 ## Annotate cell types
 
@@ -179,18 +301,18 @@ Idents(so) <- "fine_immune_clusters"
 
 mkrs <- wilcoxauc(so, "fine_immune_clusters")
 
-mkrs <- filter(mkrs, logFC > 0, padj < 0.05) %>% 
+mkrs <- filter(mkrs, logFC > 0, padj < 0.05, pct_in > 0.10) %>% 
   group_by(group) %>% 
   arrange(padj, desc(logFC), .by_group = TRUE)
 
 mkrs %>% 
-  write_tsv(file.path(mkrs_dir, "immune_subset_cluster_markers.tsv"))
+  write_tsv(file.path(mkrs_dir, "immune_cluster_markers.tsv"))
 
 mkrs %>% 
   ungroup() %>% 
   split(., .$group) %>% 
   write_markers_xlsx(.,
-                     file.path(tbls_dir, "immune_subset_cluster_markers.xlsx"))
+                     file.path(tbls_dir, "immune_cluster_markers.xlsx"))
 
 ```
 
@@ -259,7 +381,7 @@ save_plot(file.path(fig_dir, "composition_shift_odds.pdf"),
 ```
 
 ```{r}
-p <- plot_features_split(so, "fine_immune_clusters", "subgroup")
+p <- plot_umap(so, "fine_immune_clusters", group = "subgroup")
 
 p
 
@@ -271,7 +393,189 @@ save_plot(file.path(fig_dir, "umap_split_by_cluster.pdf"),
 
 ```
 
+## Additional annotation
 
+
+```{r}
+
+immune_new_long_ids <- c(
+  "8" = "B-cells (CD79A+, IGHM+)",
+  "10" = "Treg (FOXP3+, CTLA4+)",
+  "9" = "Proliferative (MKI67+, TOP2A+)",
+  "6" = "Microglia (P2RY12+ TMEM119+)",
+  "0" = "T-cells (CD3G+, IL32+)",
+  "7" = "NK-cells (GNLY+, NKG7+)",
+  "5" = "Neutrophil/Monocyte (S100A9+, THBS1+)",
+  "4" = "Dendritic-cell-like (CD1C+,FCER1A+)",
+  "2" = "TAM CytoHi+ (CCL3+, SPP1+)",
+  "1" = "TAM M1/M2 (APOE+, TYROBP+)",
+  "3" = "TAM M1/M2 (MRC1+ CD163+)"
+)
+so@meta.data$new_cell_type_ids <- immune_new_long_ids[as.character(so$fine_immune_clusters)]
+   
+
+so@meta.data$new_cell_type_ids_short <- str_split(so$new_cell_type_ids, 
+                                                  " ",
+                                                  simplify = TRUE) %>% 
+  .[, 1]
+   
+plot_umap(so, "new_cell_type_ids")
+plot_umap(so, "new_cell_type_ids_short")
+```
+
+## Immune cluster markers
+
+```{r}
+library(presto)
+
+Idents(so) <- "new_cell_type_ids"
+
+full_mkrs <- wilcoxauc(so, "new_cell_type_ids")
+
+mkrs <- filter(full_mkrs, logFC > 0, padj < 0.05, pct_in > 0.10) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC), .by_group = TRUE)
+
+mkrs %>% 
+  write_tsv(file.path(mkrs_dir, "immune_cell_type_markers.tsv"))
+
+mkrs %>% 
+  ungroup() %>% 
+  split(., .$group) %>% 
+  write_markers_xlsx(.,
+                     file.path(tbls_dir, "immune_cell_type_markers.xlsx"))
+
+full_mkrs %>% 
+  write_tsv(file.path(mkrs_dir, "immune_cell_type_full_results.tsv"))
+
+
+```
+
+### Each cell type
+
+```{r}
+library(gprofiler2)
+library(ggrepel)
+mkrs <- read_tsv(file.path(mkrs_dir, 
+                    "immune_cell_type_markers.tsv")) %>% 
+  filter(logFC > 0, padj < 0.05, pct_in > 0.10) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC), .by_group = TRUE) %>% 
+  slice(1:500)
+
+res  <- map(unique(mkrs$group), function(x){
+  clust_mkrs <- filter(mkrs, group == x) %>% 
+    pull(feature) %>% 
+    .[1:500]
+  go_res <- gost(clust_mkrs, 
+                 ordered_query = TRUE,
+                 sources = c("GO", 
+                             "KEGG", 
+                             "REAC", 
+                             "TF"))
+  p <- gostplot(go_res, 
+                interactive = FALSE)
+  
+  
+  text_data <- group_by(p$data, 
+                        source) %>% 
+    slice(1:2)
+  
+  p + 
+    geom_text_repel(data = text_data, aes(label = term_name))
+
+    go_res[["result"]] %>% 
+    mutate(parents = unlist(map(parents, ~str_c(.x, collapse = ","))),
+           source = str_replace_all(source, "[[:punct:]]", " ")) %>% 
+    select(-significant, -query)
+})
+
+names(res) <- str_c("cluster_", unique(mkrs$group))
+
+openxlsx::write.xlsx(res,
+                     file.path(tbls_dir,"immune_cell_type_goterms.xlsx"))
+  
+```
+
+
+
+## Cell proportions
+
+```{r}
+p <- plot_cell_proportions(so, 
+                      sample_id = "UPN",
+                      group_id = "new_cell_type_ids",
+                      facet_by = "subgroup") +
+  theme(strip.text = element_text(angle = 45))
+p
+```
+
+
+## Average Expression per cluster
+
+```{r}
+write_avg_expr(so,  
+               "new_cell_type_ids",
+               file.path(tbls_dir, 
+                         "new_cell_type_id_avgexpr.tsv.gz"))
+
+cell_count_mat <- get_cell_count_matrix(so, "UPN", "new_cell_type_ids")
+
+cell_count_mat[is.na(cell_count_mat)] <- 0L
+
+cell_count_mat %>% 
+  tibble::rownames_to_column("UPN") %>% 
+write_csv(file.path(tbls_dir, 
+                         "immune_cell_type_cell_counts.csv"))
+
+
+full_marker_matrix <- full_mkrs %>% 
+  top_marker_matrix(.) 
+  
+topn_marker_matrix <- full_mkrs %>% 
+  top_marker_matrix(n = 200) 
+
+out <- list(avg_expression = read_tsv(file.path(tbls_dir, "new_cell_type_id_avgexpr.tsv.gz")),
+     logFC_all = full_marker_matrix,
+     top_200_logFC = topn_marker_matrix)
+
+openxlsx::write.xlsx(out, 
+                     file.path(tbls_dir, "immune_cell_type_expression_logfc_summaries.xlsx"))
+```
+
+
+```{r}
+GetAssayData(so, "counts") %>% 
+  as.matrix(.) %>% 
+  as.data.frame() %>% 
+  rownames_to_column("gene") %>% 
+  data.table::fwrite(., file.path(tbls_dir, "immune_count_matrix.tsv.gz"),
+       sep = "\t",
+       compress = "gzip")
+  
+# expression matrix filtered at least 25 cells express the gene
+expr_mat <- GetAssayData(so, "data")
+expr_mat <- expr_mat[Matrix::rowSums(expr_mat > 0) >= 25, ]
+
+expr_mat %>% 
+  as.matrix(.) %>% 
+  as.data.frame() %>% 
+  rownames_to_column("gene") %>% 
+  data.table::fwrite(., file.path(tbls_dir, "immune_expr_matrix.tsv.gz"),
+       sep = "\t",
+       compress = "gzip")
+```
+
+## save object
+
+
+```{r }
+qsave(so, file.path(obj_dir, "immune_so.qs"))
+```
+
+```{r, eval = FALSE}
+so <- qread(file.path(obj_dir, "immune_so.qs"), use_alt_rep = FALSE )
+```
 ## Markers within cluster
 
 ```{r}
@@ -442,6 +746,8 @@ p <- ggplot(per_patient,
         strip.background = element_rect(fill = "white"))
 p
 ```
+
+
 ## Gene set enrichment
 
 ### Macrophages
@@ -481,198 +787,4 @@ go_res[["result"]] %>%
   openxlsx::write.xlsx(., file.path(tbls_dir, "monocyte_shh_gp4_goterms.xlsx"))
 ```
 
-
-### Each cell type
-
-```{r}
-library(gprofiler2)
-mkrs <- read_tsv(file.path(mkrs_dir, 
-                    "immune_subset_cell_type_markers.tsv")) %>% 
-  filter( p_val_adj < 0.05) 
-
-map(unique(mkrs$cluster), function(x){
-  clust_mkrs <- filter(mkrs, cluster == x) %>% 
-    pull(gene)
-go_res <- gost(clust_mkrs, 
-               ordered_query = TRUE,
-               sources = c("GO", 
-                          "KEGG", 
-                          "REAC", 
-                          "TF"))
-p <- gostplot(go_res, 
-              interactive = FALSE)
-              
-
-text_data <- group_by(p$data, 
-                      source) %>% 
-  slice(1:2)
-
-p + 
-  geom_text_repel(data = text_data, aes(label = term_name))
-
-go_res[["result"]] %>% 
-  mutate(parents = unlist(map(parents, ~str_c(.x, collapse = ",")))) %>% 
-  write_tsv(., file.path(tbls_dir, str_c(x, "_goterms.tsv")))
-
-go_res[["result"]] %>% 
-  mutate(parents = unlist(map(parents, ~str_c(.x, collapse = ","))),
-         source = str_replace_all(source, "[[:punct:]]", " ")) %>% 
-  select(-significant, -query) %>% 
-  split(., .$source) %>% 
-  openxlsx::write.xlsx(., file.path(tbls_dir, 
-                                    str_c(x, "_goterms.xlsx")))
-})
-```
-
-
-## save object
-
-```{r }
-qsave(so, file.path(obj_dir, "immune_so.qs"))
-```
-
-
-## Additional annotation
-
-
-Activate Macrophages look like those seen in HCC (REF) and DAM microglia seen in alzehemiers (Keren-Shaul, H., Spinrad, A., Weiner, A., Matcovitch-Natan, O., DvirSzternfeld, R., Ulland, T.K., David, E., Baruch, K., Lara-Astaiso, D., Toth, B.,
-et al. (2017). A unique microglia type associated with restricting development
-of Alzheimer’s disease. Cell 169, 1276–1290.e17).
-
-Cluster 4 expresses DC markers (similar to dc markers seen in myleoid cells in CSF of HIV patients, and in the HCC paper)
-
-Cluster 5 is similar to DCs (CD1C+) and Monocytes (CD14+/CD16-) from this scRNA-seq survey: 10.1126/science.aah4573. But also express markers of Neutrophils. 
-
-Cluster 1 is similar to the periperial myeloid cells found in glioblastoma 
-(Single-Cell RNA-Seq Analysis of Infiltrating Neoplastic Cells at the Migrating Front of Human Glioblastoma)
-
-```{r}
-# immune_new_long_ids <- c(
-#   "10" = "Proliferative (MKI67+, TOP2A+)",
-#   "11" = "Unknown1 (SEZ6L2, AMER2)",
-#   "6" = "Unknown2 (CADM1, OLR1*)",
-#   "12" = "Treg (FOXP3+, CTLA4+)",
-#   "0" = "T-cells (CD3G+, IL32+)",
-#   "7" = "NK-cells (GNLY+, NKG7+)",
-#   "9" = "B-cells (CD79A+, IGHM+)",
-#  "8" = "Microglia (P2RY12+ TMEM119+)",
-#  "3" = "Activated-Microglia 1 (APOE+, GPNMB+)",
-#  "2" = "Activated-Microglia 2 (APOE+, TYROBP+)",
-#   "1" = "Activated-Microglia 3 (CCL3+, SPP1+)",
-#  "5" = "Neutrophil (S100A9+, THBS1+)",
-#  "4" = "Dendritic-cell-like (CD1C+,FCER1A+)"
-# )
-#   
-  
-immune_new_long_ids <- c(
-  "9" = "B-cells (CD79A+, IGHM+)",
-  "0" = "T-cells (CD3G+, IL32+)",
-  "7" = "NK-cells (GNLY+, NKG7+)",
-  "12" = "Treg (FOXP3+, CTLA4+)",
-  "10" = "Proliferative (MKI67+, TOP2A+)",
-  "5" = "Neutrophil/Monocyte (S100A9+, THBS1+)",
-  "8" = "Microglia (P2RY12+ TMEM119+)",
-  "6" = "Unknown2 (CADM1, OLR1*)",
-  "1" = "TAM M1/M2 (APOE+, TYROBP+)",
-  "2" = "TAM CytoHi+ (CCL3+, SPP1+)",
-  "3" = "TAM M1/M2 (MRC1+ CD163+)",
-  "4" = "Dendritic-cell-like (CD1C+,FCER1A+)",
-  "11" = "Unknown1 (SEZ6L2, AMER2)"
-)
-so@meta.data$new_cell_type_ids <- immune_new_long_ids[as.character(so$fine_immune_clusters)]
-   
-
-so@meta.data$new_cell_type_ids_short <- str_split(so$new_cell_type_ids, 
-                                                  " ",
-                                                  simplify = TRUE) %>% 
-  .[, 1]
-   
-plot_umap(so, "new_cell_type_ids")
-plot_umap(so, "new_cell_type_ids_short")
-```
-
-
-
-Format gene lists for clustifyr
-
-
-```{r}
-library(readxl)
-sig_dir <- file.path(proj_dir, "dbases", "gene_signatures")
-
-gene_lsts <- read_excel(file.path(sig_dir, "brca", "mmc4.xlsx"),
-                skip = 1) 
-
-gene_lsts <- as.list(gene_lsts) %>% 
-  map(~.x[!is.na(.x)])
-
-additional_gene_lsts <- read_excel(file.path(sig_dir, "monocytes", "aah4573_Supplementary_Tables_1-16.xlsx"),
-                skip = 2,
-                sheet = 2) %>% split(., .$Associated.Cell.Population) %>%
-  map(~pull(.x, Gene.ID)) 
-
-gene_lsts <- c(gene_lsts, additional_gene_lsts)
-
-additional_gene_lsts <- read_excel(file.path(sig_dir, "monocytes", "aah4573_Supplementary_Tables_1-16.xlsx"),
-                skip = 2,
-                sheet = 5) %>% split(., .$Associated.Cell.Population) %>%
-  map(~pull(.x, Gene.ID)) 
-
-gene_lsts <- c(gene_lsts, additional_gene_lsts)
-
-# resets length to longest, fills with NA
-to_add <- names(gene_lsts)
-marker_df <- lapply(gene_lsts, `length<-`, max(lengths(gene_lsts))) %>% 
- map(~tibble(gene = .x)) %>% 
-  bind_cols()
-
-colnames(marker_df) <- to_add
-
-
-res <- clustify_lists(
-  input = so,
-  per_cell = FALSE,
-  marker = marker_df,
-  marker_inmatrix = FALSE,
-  cluster_col = "fine_immune_clusters",
-  seurat_out = FALSE,
-  metric = "jaccard",
-  dr = "umap"
-)
-plot_cor_heatmap(res)
-
-# for (i in seq_along(gene_lsts)){
-#   so <- AddModuleScore(so, 
-#                        features = gene_lsts[i], 
-#                        name = names(gene_lsts)[i],
-#                        search = TRUE)
-# }
-# 
-# cols_to_plot <- colnames(so@meta.data)[which(colnames(so@meta.data) == "Treg1"):which(colnames(so@meta.data) == "pDC1")]
-# 
-# map(cols_to_plot, 
-#     ~plot_umap(so, .x, show_negative = TRUE))
-```
-
-
-## Average Expression per cluster
-
-```{r}
-plot_feature(so, 
-             "new_cell_type_ids",
-             embedding = "umap")
-
-avg_tbl_dir <- file.path(tbls_dir, "avg_expr", "immune")
-dir.create(avg_tbl_dir, recursive = TRUE)
-
-write_avg_expr(so,  
-               "new_cell_type_ids",
-               file.path(avg_tbl_dir, 
-                         "avgexpr.tsv.gz"))
-```
-
-
-```{r}
-qsave(so, file.path(obj_dir, "immune_so.qs"))
-```
 
