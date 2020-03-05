@@ -33,7 +33,7 @@ walk(c(fig_dir, mkrs_dir, tbls_dir, obj_dir),
 seed_value <- 20200204
 ```
 
-# Get ortholog table
+## Get ortholog table
 
 Download list of orthologs between mouse and human as gene symbols.
 
@@ -64,10 +64,15 @@ orthologs <- filter(orthologs,
   ungroup()
 
 orthologs <- mutate(orthologs, 
-                    ortho_id = str_c(external_gene_name, ":", mmusculus_homolog_associated_gene_name))
-```
+                    ortho_id = str_c(external_gene_name, ":",
+                                     mmusculus_homolog_associated_gene_name))
 
-# GP mouse model
+cc_mouse_genes <- map(cc.genes.updated.2019, 
+                      ~tibble(external_gene_name = .x) %>% 
+                        left_join(orthologs, by = "external_gene_name") %>% 
+                        na.omit() %>% 
+                        pull(mmusculus_homolog_associated_gene_name))
+```
 
 >
 For the mouse samples
@@ -77,7 +82,8 @@ MG CD2 luc is the second model (MYC + GFI1 expression in CD133+ cells).
 
 10.1016/j.ccr.2011.12.021
 
-## Preprocess
+
+## Samples
 
 ```{r get_data}
 samples <- c(
@@ -97,10 +103,9 @@ mat <- Read10X(sample_paths)
 ```
 
 
-### General QC for library prep  {.tabset}
+## General QC for library prep  {.tabset}
 
 ```{r }
-
 metrics_paths <- file.path(data_dir,
                           samples,
                           "outs", 
@@ -139,7 +144,6 @@ p <- map(metrics,
 ```
 
 ```{r, results ='asis'}
-
 for(i in seq_along(p)){
   cat('\n### ', metrics[i], '\n')
   print(p[i])
@@ -151,7 +155,6 @@ for(i in seq_along(p)){
 ## Preprocessing {.tabset}
 
 ```{r create_seurat, message = F, results = 'hide', warning = F}
-
 so <- CreateSeuratObject(
   mat,
   min.cells = 3,
@@ -218,7 +221,6 @@ so@meta.data %>%
   summarize(median_percent_mito = median(percent.mt), 
             mean_percent_mito = mean(percent.mt)) %>% 
   arrange(desc(median_percent_mito))
-
 ```
 
 
@@ -241,7 +243,6 @@ plot_grid(plotlist= p, nrow = 1, ncol = 3)
 ```
 
 ```{r, results ='asis'}
-
 for(i in seq_along(per_sample)){
   .col <- discrete_palette_default[i]
   cat('\n### ', sample_names[i], '\n')
@@ -256,7 +257,7 @@ for(i in seq_along(per_sample)){
 
 ## Filter cells and samples.
 
-Suggest removing cells with > 20% mitochondrial UMIs. Also remove sample `1_Mpcont` which has very few cells 
+Suggest removing cells with > 30% mitochondrial UMIs. Also remove sample `1_Mpcont` which has very few cells 
 
 ```{r}
 so <- subset(so, subset = percent.mt < 30)
@@ -267,14 +268,11 @@ so <- subset(so, subset = orig.ident != "1_Mpcont")
 
 ```{r}
 so <- NormalizeData(so, verbose = FALSE)
-
 so <- FindVariableFeatures(so, 
                            selection.method = "vst", 
                            nfeatures = 3000, 
                            verbose = FALSE)
-
 so <- ScaleData(so, verbose = TRUE)
-
 so <- RunPCA(so, npcs = 40, verbose = FALSE, seed.use = seed_value)
 
 ElbowPlot(so, ndims = 40)
@@ -296,7 +294,6 @@ plts[[2]] <- plot_features_split(so,
                                  embedding = "umap",
                                  cols = discrete_palette_default)
 plts
-
 ```
 
 ```{r}
@@ -492,46 +489,21 @@ iwalk(plts,
 ```
 
 
-#### Get markers
+### Get markers
 
 ```{r}
 library(presto)
 mkrs <- wilcoxauc(so, "clusters")
 
-mkrs <- filter(mkrs, logFC > 0, padj < 0.05) %>% 
-  group_by(group) %>% 
-  arrange(padj, desc(logFC), .by_group = TRUE)
-
-mkrs %>% 
-  write_tsv(file.path(mkrs_dir, "mb_models_cluster_markers.tsv"))
-
-mkrs %>% 
-  ungroup() %>% 
-  split(., .$group) %>% 
-  write_markers_xlsx(.,
-                     file.path(tbls_dir, "mb_models_cluster_markers.xlsx"))
+mkrs <- get_marker_summaries(so, "clusters",prefix = "gp3_mouse_models",
+                     tsv_output_dir = mkrs_dir,
+                     xlsx_output_dir = tbls_dir)
+mkrs
 ```
 
 
 ### fix cell type assignments
 
-
-```{r}
-new_ids <- c(
-  '5' = "monocytes",
-  '9' = "CTLA4+ t-cells",
-  '11' = "endothelial",
-  '0' = 'malignant',
-  '1' = 'malignant',
-  '2' = 'malignant',
-  '3' = 'malignant',
-  '4' = 'neuroendocrine-malignant', # also expresses luc-firefly
-  '6' = 'malignant',
-  '7' = 'malignant',
-  '8' = 'malignant',
-  '10' = 'malignant'
-  )
-```
 
 ```{r}
 plot_umap(so, "clusters", label_text = TRUE)
@@ -717,12 +689,121 @@ write_tsv(mdata_out, outname)
 ## save object
 
 ```{r}
-saveRDS(so, file.path(obj_dir,
-                  "mb_models_sobj.rds"))
+qsave(so, file.path(obj_dir,"gp3_models_sobj.qs"))
 ```
 
 
-## Pull out immune subclusters
+# MYC + DNP53 
+
+```{r}
+# new_expt_labels <- c(
+#   "2_MP" = "MYC + DNP53",
+#   "3_MG" = "MYC + GFI1"
+# )
+seed_value <- 20200301
+res_settings <- c(0.1, 0.2, 0.3, 0.4, 0.5, 0.6)
+so_p53 <- subset(so, subset = orig.ident == "2_MP") %>% 
+  NormalizeData(verbose = FALSE) %>% 
+  FindVariableFeatures(selection.method = "vst", 
+                       nfeatures = 3000, 
+                       verbose = FALSE) %>% 
+  ScaleData(verbose = FALSE) %>% 
+  RunPCA(npcs = 40, 
+         verbose = FALSE, 
+         seed.use = seed_value) %>% 
+  FindNeighbors(reduction = "pca", 
+                dims = 1:30,
+                verbose = FALSE) %>% 
+  RunUMAP(dims = 1:30,
+          min.dist = 0.3,
+          seed.use = seed_value,
+          verbose = FALSE) %>% 
+  FindClusters(resolution = res_settings,
+               verbose = FALSE) %>% 
+  CellCycleScoring(s.features = cc_mouse_genes$s.genes,
+                   g2m.features = cc_mouse_genes$g2m.genes) %>% 
+  PercentageFeatureSet(pattern = "^mt-", 
+                       col.name = "percent.mt")
+
+so_p53$seurat_clusters <- NULL
+```
+
+```{r}
+cluster_cols <- str_subset(colnames(so_p53@meta.data), "res")
+plot_umap(so_p53, cluster_cols)
+```
+
+
+```{r}
+so_p53$clusters <- so_p53$RNA_snn_res.0.3
+
+library(presto)
+
+mkrs <- get_marker_summaries(so_p53, 
+                             "clusters",
+                             prefix = "myc_dnp53",
+                     tsv_output_dir = mkrs_dir,
+                     xlsx_output_dir = tbls_dir)
+mkrs
+```
+
+```{r}
+top_features <- mkrs$mkrs %>%  
+  ungroup() %>% 
+  mutate(group = as.factor(as.integer(group))) %>% 
+  group_by(group) %>% 
+  dplyr::slice(1:10) %>% 
+  pull(feature) %>% 
+  unique()
+
+tmp_so <- so_p53[top_features, ] %>% 
+  ScaleData(features = top_features)
+
+p <- DoHeatmap(tmp_so, 
+               group.colors = discrete_palette_default,
+               features = top_features,
+               group.by = "clusters",
+               angle = 0, 
+               raster = FALSE, 
+               draw.lines = TRUE) +
+  scale_fill_gradientn(colours = viridis::viridis(256),
+                       name = "Expression\nZ-scores")
+
+save_plot(file.path(fig_dir, "heatmap_markers_myc_dnp53.pdf"), 
+          p,
+          base_width = 10,
+          base_height = 12)
+
+p
+```
+
+
+```{r}
+library(clustifyr)
+library(ComplexHeatmap)
+
+tm_average <- readRDS("/Users/kriemo/Projects/sc_repos/vanotterloo/data/tabula_muris/TM_avg_expr.rds")
+
+mdata <- get_metadata(so)
+so <- FindVariableFeatures(so)
+res <- clustify(so@assays$RNA@data, 
+                tm_average, 
+                query_genes = so@assays$RNA@var.features,
+                metadata = mdata, 
+                cluster_col = "immune_clusters", 
+                compute_method = "spearman")
+
+hmap <- Heatmap(t(res), 
+                viridis::viridis(256), 
+                "Spearman\ncorrelation",
+                row_title = "Cell types from Tabula Muris",
+                column_title = "Clusters")
+
+hmap
+```
+```
+
+## Immune subclusters
 
 
 Assess the similarities between the human immune compartment and the mouse models. 

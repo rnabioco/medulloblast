@@ -464,9 +464,9 @@ datasets <- c(
    "medulloblastoma_neoplastic/cellbrowser.conf",
    "medulloblastoma_neoplastic_shh/cellbrowser.conf",
    "medulloblastoma_neoplastic_gp34/cellbrowser.conf",
-    "medulloblastoma_immune/cellbrowser.conf",
-    "medulloblastoma_neoplastic_gp3_only/cellbrowser.conf",
-    "medulloblastoma_neoplastic_gp4_only/cellbrowser.conf"
+   "medulloblastoma_immune/cellbrowser.conf",
+   "medulloblastoma_neoplastic_gp3_only/cellbrowser.conf",
+   "medulloblastoma_neoplastic_gp4_only/cellbrowser.conf"
 )
 
 datasets <- file.path(cb_outdir, datasets)

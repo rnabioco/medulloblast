@@ -1,7 +1,7 @@
 ---
 title: "Shh mouse model"
 author: "Kent Riemondy RBI"
-date: "`R Sys.Date()`"
+date: "`r Sys.Date()`"
 knit: (function(inputFile, encoding) {
   rmarkdown::render(inputFile, encoding = encoding, output_dir = "html") })
 output:
@@ -158,10 +158,6 @@ so@meta.data <- so@meta.data %>%
   as.data.frame() %>% 
   tibble::column_to_rownames("cell")
 
-dir.create(file.path("objects",
-                     "mouse_models"),
-           showWarnings = FALSE)
-
 rm(mat)
 a <- gc()
 ```
@@ -235,7 +231,7 @@ for(i in seq_along(per_sample)){
 
 ## Filter cells and samples.
 
-Suggest removing cells with > 20% mitochondrial UMIs. 
+Suggest removing cells with > 30% mitochondrial UMIs. 
 
 ```{r}
 so <- subset(so, subset = percent.mt < 30)
@@ -381,21 +377,14 @@ map(c("clusters", "tabula_muris_cell_type"),
 #### Get markers
 
 ```{r}
-library(presto)
-mkrs <- wilcoxauc(so, "clusters")
+mkrs <- get_marker_summaries(so,
+                     group_col = "clusters",
+                     tsv_output_dir = mkrs_dir,
+                     xlsx_output_dir =  tbls_dir, prefix = "shh_mouse_model"
+                     )
 
-mkrs <- filter(mkrs, logFC > 0, padj < 0.05) %>% 
-  group_by(group) %>% 
-  arrange(padj, desc(logFC), .by_group = TRUE)
-
-mkrs %>% 
-  write_tsv(file.path(mkrs_dir, "shh_cluster_markers.tsv"))
-
-mkrs %>% 
-  ungroup() %>% 
-  split(., .$group) %>% 
-  write_markers_xlsx(.,
-                     file.path(tbls_dir, "shh_cluster_markers.xlsx"))
+full_mkrs <- mkrs$full_markers
+mkrs <- mkrs$mkrs
 ```
 
 
@@ -628,6 +617,45 @@ save_plot(file.path(fig_dir, "umap_shh_by_SHH_human_signatures.pdf"),
 ```
 
 
+## GO terms
+
+```{r}
+library(gprofiler2)
+library(ggrepel)
+mkrs <- read_tsv(file.path(mkrs_dir, 
+                    "shh_mouse_model_cluster_markers.tsv")) %>% 
+  filter( padj < 0.05,
+          pct_in > 0.10) %>% 
+  group_by(group) %>% 
+  slice(1:500)
+
+mkrs_split <- split(mkrs, mkrs$group) %>% 
+  map(~pull(.x, feature))
+
+go_res <- gost(mkrs_split, 
+               ordered_query = TRUE,
+               sources = c("GO", 
+                           "KEGG", 
+                           "REAC", 
+                           "TF"))
+
+go_res[["result"]] %>% 
+  mutate(parents = unlist(map(parents, 
+                              ~str_c(.x, collapse = ",")))) %>% 
+  write_tsv(file.path(tbls_dir, "goterms_ssh_mouse_model_clusters.tsv"))
+
+go_res[["result"]] %>% 
+  mutate(parents = unlist(map(parents, 
+                              ~str_c(.x, collapse = ","))),
+         source = str_replace_all(source, 
+                                  "[[:punct:]]", " ")) %>% 
+  select(-significant) %>% 
+  split(., .$query) %>% 
+  openxlsx::write.xlsx(., file.path(tbls_dir,
+                                    "goterms_ssh_mouse_model_clusters.xlsx"))
+```
+
+
 ### Write out metadata
 
 
@@ -644,10 +672,17 @@ write_tsv(mdata_out, outname)
 ### Save object
 
 ```{r}
-saveRDS(so, file.path(obj_dir,
-                  "shh_model_sobj.rds"))
+qsave(so, file.path(obj_dir,
+                  "shh_model_so.qs"))
 ```
 
+
+## Compare tumor cells to human
+
+```{r}
+
+
+```
 
 ## subcluster immune cells
 
@@ -698,6 +733,7 @@ plts[[2]] <- plot_features_split(so,
 plts
 
 ```
+
 
 
 

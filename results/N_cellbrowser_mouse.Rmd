@@ -1,0 +1,467 @@
+---
+title: "Format UCSC cellbrowser for mouse samples"
+date: "`r Sys.Date()`"
+knit: (function(inputFile, encoding) {
+  rmarkdown::render(inputFile, encoding = encoding, output_dir = "html") })
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_collapsed: false
+    theme: cosmo
+    highlight: tango
+    fig_caption: true
+    code_folding: hide
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Format seurats object into a UCSC cellbrowser. Note requires UCSC (`cellbrowser python package`[ https://cellbrowser.readthedocs.io/index.html]) 
+
+```{r}
+library(scbp)
+library(tidyverse)
+library(qs)
+cb_outdir <- "cellbrowser_mouse"
+
+def_embeddings <- function(so) {str_subset(names(so@reductions), "umap")}
+
+qread <- function(file, ...) {qs::qread(file, ..., nthreads = 4, use_alt_rep = FALSE)}
+```
+
+# Mouse model (Gp34) dnp53
+
+## Mouse only
+```{r}
+so <- qread(file.path("objects",
+                  "mouse",
+                  "gp34",
+                  "gp3_myc_dnp53_sobj.qs"))
+
+signatures <- paste0("gp3_signatures_clust_",
+                     0:4)
+names(signatures) <- signatures
+
+cols_to_keep <- c(
+  `genes per cell` = "nFeature_RNA",
+  `UMIs per cell` = "nCount_RNA",
+  `percent of UMIs as mitochondria` = "percent.mt",
+  `clusters` = "clusters",
+  `sample` = "expt_ids",
+   cell_type = "cell_types",
+   `cell cycle phase` = "Phase",
+   firefly_expression = "luc-firefly",
+   egfp_expression = "egfp",
+  "Northcutt_cell_cycle_A" = "Group 3/4-A_cell_cycle",
+  "Northcutt_Translation_Myc_B" = "Group 3/4-B_Translation_Myc",
+  "Northcutt_Differentiation_C" = "Group 3/4-C_Differentiation"
+  )
+
+cols_to_keep <- c(cols_to_keep, signatures)
+
+make_cellbrowser(so, 
+                 column_list = cols_to_keep,
+                 secondary_cols = c(
+                    "sample",
+                    "cell_type",
+                    "cell cycle phase"), 
+                 project = "group3_model_myc_dnp53_mouse",
+                 outdir = cb_outdir,
+                 marker_file = "markers/mouse/gp34/myc_dnp53_cluster_markers.tsv",
+                 ident = "clusters",
+                 embeddings = def_embeddings(so),
+                 skip_expr_matrix = TRUE,
+                 description = list(    
+                   title = "MYC + DNp53 Group 3 medulloblastoma mouse model ",
+                   description = "scRNA-seq on mouse model. No harmony integration performed"
+                 ),
+                 config = list(priority = 1))
+```
+
+
+
+## Mouse and human
+```{r}
+so <- qread(file.path("objects",
+                  "mouse",
+                  "gp34",
+                  "human_integrated",
+                  "human_gp34_myc_dnp53_sobj.qs"))
+
+cols_to_keep <- c(
+  `genes per cell` = "nFeature_RNA",
+  `UMIs per cell` = "nCount_RNA",
+  `percent of UMIs as mitochondria` = "percent.mt",
+  `clusters` = "clusters",
+  `human_gp34_clusters` = "coarse_clusters_gp34_harmony",
+  `Subgroup` = "subgroup",
+  `Subtype` = "subtype",
+  `Species` = "species",
+  `sample` = "expt_ids",
+   cell_type = "cell_types",
+   `cell cycle phase` = "Phase",
+   firefly_expression = "luc.firefly",
+   egfp_expression = "egfp"
+  )
+
+make_cellbrowser(so, 
+                 column_list = cols_to_keep,
+                 secondary_cols = c(
+                   "species",
+                    "Subgroup",
+                    "Subtype",
+                    "sample",
+                    "cell_type",
+                    "cell cycle phase"), 
+                 project = "group3_model_myc_dnp53_mouse_and_gp34_human",
+                 outdir = cb_outdir,
+                 # marker_file = "markers/mouse_models/tsv/mb_models_cluster_markers.tsv",
+                 ident = "human_gp34_clusters",
+                 embeddings = def_embeddings(so),
+                 skip_expr_matrix = TRUE,
+                 description = list(    
+                   title = "MYC + DNp53 model with human group3 and 4 tumors  ",
+                   description = "scRNA-seq on mouse model integrated with human group 3 and group 4 tumors. There are three umap projections  \n1) umap: No integration  \n2) umap_harmony: Integration was performed by species  \n3) umap_harmony_upn: Integration was performed by UPN"
+                 ),
+                 config = list(priority = 2, radius = 2, alpha = 0.3)
+                 )
+```
+
+
+
+
+## Mouse only normal cells
+```{r}
+so <- qread(file.path("objects",
+                  "mouse",
+                  "gp34",
+                  "normal_immune",
+                  "gp3_myc_dnp53_sobj.qs"))
+
+cols_to_keep <- c(
+  `genes per cell` = "nFeature_RNA",
+  `UMIs per cell` = "nCount_RNA",
+  `percent of UMIs as mitochondria` = "percent.mt",
+  `clusters` = "clusters",
+  `sample` = "expt_ids",
+   cell_type = "cell_types",
+   `cell cycle phase` = "Phase",
+   firefly_expression = "luc-firefly",
+   egfp_expression = "egfp"
+  )
+
+make_cellbrowser(so, 
+                 column_list = cols_to_keep,
+                 secondary_cols = c(
+                    "sample",
+                    "cell_type",
+                    "cell cycle phase"), 
+                 project = "group3_model_myc_dnp53_mouse_immune",
+                 outdir = cb_outdir,
+                 marker_file = "markers/mouse/gp34/normal_immune/myc_dnp53_celltype_cluster_markers.tsv",
+                 ident = "cell_type",
+                 embeddings = def_embeddings(so),
+                 skip_expr_matrix = FALSE,
+                 description = list(    
+                   title = "MYC + DNp53 Group 3 medulloblastoma mouse model ",
+                   description = "scRNA-seq on mouse model. Normal and Immune cells reclustered. No harmony integration performed"
+                 ),
+                 config = list(priority = 3))
+```
+
+
+
+
+# Mouse model (Gp34) GFI1
+
+## Mouse only
+```{r}
+so <- qread(file.path("objects",
+                  "mouse",
+                  "gp34",
+                  "gp3_myc_gfi1_sobj.qs"))
+
+signatures <- paste0("gp3_signatures_clust_",
+                     0:4)
+names(signatures) <- signatures
+
+cols_to_keep <- c(
+  `genes per cell` = "nFeature_RNA",
+  `UMIs per cell` = "nCount_RNA",
+  `percent of UMIs as mitochondria` = "percent.mt",
+  `clusters` = "clusters",
+  `sample` = "expt_ids",
+   cell_type = "cell_types",
+   `cell cycle phase` = "Phase",
+   firefly_expression = "luc-firefly",
+   egfp_expression = "egfp",
+  "Northcutt_cell_cycle_A" = "Group 3/4-A_cell_cycle",
+  "Northcutt_Translation_Myc_B" = "Group 3/4-B_Translation_Myc",
+  "Northcutt_Differentiation_C" = "Group 3/4-C_Differentiation"
+  )
+
+cols_to_keep <- c(cols_to_keep, signatures)
+
+make_cellbrowser(so, 
+                 column_list = cols_to_keep,
+                 secondary_cols = c(
+                    "sample",
+                    "cell_type",
+                    "cell cycle phase"), 
+                 project = "group3_model_myc_gfi1_mouse",
+                 outdir = cb_outdir,
+                 marker_file = "markers/mouse/gp34/myc_gfi1_cluster_markers.tsv",
+                 ident = "clusters",
+                 embeddings = def_embeddings(so),
+                 skip_expr_matrix = TRUE,
+                 description = list(    
+                   title = "MYC + GFI1 Group 3 medulloblastoma mouse model ",
+                   description = "scRNA-seq on mouse model. No harmony integration performed"
+                 ),
+                 config = list(priority = 4))
+```
+
+
+
+## Mouse and human
+```{r}
+so <- qread(file.path("objects",
+                  "mouse",
+                  "gp34",
+                  "human_integrated",
+                  "human_gp34_myc_gfi1_sobj.qs"))
+
+cols_to_keep <- c(
+  `genes per cell` = "nFeature_RNA",
+  `UMIs per cell` = "nCount_RNA",
+  `percent of UMIs as mitochondria` = "percent.mt",
+  `clusters` = "clusters",
+  `human_gp34_clusters` = "coarse_clusters_gp34_harmony",
+  `Subgroup` = "subgroup",
+  `Subtype` = "subtype",
+  `Species` = "species",
+  `sample` = "expt_ids",
+   cell_type = "cell_types",
+   `cell cycle phase` = "Phase",
+   firefly_expression = "luc.firefly",
+   egfp_expression = "egfp"
+  )
+
+make_cellbrowser(so, 
+                 column_list = cols_to_keep,
+                 secondary_cols = c(
+                    "sample",
+                    "species",
+                    "Subgroup",
+                    "Subtype",
+                    "cell_type",
+                    "cell cycle phase"), 
+                 project = "group3_model_myc_gfi1_mouse_and_gp34_human",
+                 outdir = cb_outdir,
+                 # marker_file = "markers/mouse_models/tsv/mb_models_cluster_markers.tsv",
+                 ident = "human_gp34_clusters",
+                 embeddings = def_embeddings(so),
+                 skip_expr_matrix = TRUE,
+                 description = list(    
+                   title = "MYC + Gfi1 model with human group3 and 4 tumors  ",
+                   description = "scRNA-seq on mouse model integrated with human group 3 and group 4 tumors. There are three umap projections  \n1) umap: No integration  \n2) umap_harmony: Integration was performed by species  \n3) umap_harmony_upn: Integration was performed by UPN"
+                 ),
+                 config = list(priority = 5, radius = 2, alpha = 0.3)
+                 )
+```
+## Mouse only normal cells
+```{r}
+so <- qread(file.path("objects",
+                  "mouse",
+                  "gp34",
+                  "normal_immune",
+                  "gp3_myc_gfi1_sobj.qs"))
+
+cols_to_keep <- c(
+  `genes per cell` = "nFeature_RNA",
+  `UMIs per cell` = "nCount_RNA",
+  `percent of UMIs as mitochondria` = "percent.mt",
+  `clusters` = "clusters",
+  `sample` = "expt_ids",
+   cell_type = "cell_types",
+   `cell cycle phase` = "Phase",
+   firefly_expression = "luc-firefly",
+   egfp_expression = "egfp"
+  )
+
+make_cellbrowser(so, 
+                 column_list = cols_to_keep,
+                 secondary_cols = c(
+                    "sample",
+                    "cell_type",
+                    "cell cycle phase"), 
+                 project = "group3_model_myc_gfi1_mouse_immune",
+                 outdir = cb_outdir,
+                 marker_file = "markers/mouse/gp34/normal_immune/myc_gfi1_celltype_cluster_markers.tsv",
+                 ident = "cell_type",
+                 embeddings = def_embeddings(so),
+                 skip_expr_matrix = FALSE,
+                 description = list(    
+                   title = "MYC + Gfi1 Group 3 medulloblastoma mouse model ",
+                   description = "scRNA-seq on mouse model. Normal and Immune cells reclustered. Epithelial cell cluster excluded. No harmony integration performed"
+                 ),
+                 config = list(priority = 6))
+```
+
+# sHH
+
+## Mouse only
+```{r}
+so <- qread(file.path("objects",
+                  "mouse",
+                  "shh",
+                  "shh_sobj.qs"))
+
+signatures <- paste0("shh_signatures_clust_",
+                     0:6)
+names(signatures) <- signatures
+
+cols_to_keep <- c(
+  `genes per cell` = "nFeature_RNA",
+  `UMIs per cell` = "nCount_RNA",
+  `percent of UMIs as mitochondria` = "percent.mt",
+  `clusters` = "clusters",
+  `sample` = "UPN",
+   cell_type = "cell_types",
+   `cell cycle phase` = "Phase",
+  "Northcutt_cell_cycle_A" = "SHH-A-cell_cycle",
+  "Northcutt_SHH_signaling_B" = "SHH-B-SHH_signaling",
+  "Northcutt_Differentiation_C" = "SHH-C-Differentiation"
+  )
+
+cols_to_keep <- c(cols_to_keep, signatures)
+
+make_cellbrowser(so, 
+                 column_list = cols_to_keep,
+                 secondary_cols = c(
+                    "sample",
+                    "cell cycle phase"), 
+                 project = "shh_model",
+                 outdir = cb_outdir,
+                 marker_file = "markers/mouse/shh/shh_cluster_markers.tsv",
+                 ident = "clusters",
+                 embeddings = def_embeddings(so),
+                 skip_expr_matrix = TRUE,
+                 description = list(    
+                   title = "SHH medulloblastoma mouse model ",
+                   description = "scRNA-seq on mouse model. No harmony integration performed"
+                 ),
+                 config = list(priority = 7))
+```
+
+
+
+## Mouse and human
+```{r}
+so <- qread(file.path("objects",
+                  "mouse",
+                  "shh",
+                  "human_integrated",
+                  "human_shh_sobj.qs"))
+
+cols_to_keep <- c(
+  `genes per cell` = "nFeature_RNA",
+  `UMIs per cell` = "nCount_RNA",
+  `percent of UMIs as mitochondria` = "percent.mt",
+  `clusters` = "clusters",
+  `human_shh_clusters` = "coarse_clusters_shh_harmony",
+  `Subgroup` = "subgroup",
+  `Subtype` = "subtype",
+  `Species` = "species",
+  `sample` = "UPN",
+   cell_type = "cell_types",
+   `cell cycle phase` = "Phase"
+  )
+
+make_cellbrowser(so, 
+                 column_list = cols_to_keep,
+                 secondary_cols = c(
+                   "Species",
+                   "Subtype",
+                   "cell_type",
+                   "cell cycle phase"), 
+                 project = "shh_model_with_shh_human",
+                 outdir = cb_outdir,
+                 # marker_file = "markers/mouse_models/tsv/mb_models_cluster_markers.tsv",
+                 ident = "human_shh_clusters",
+                 embeddings = def_embeddings(so),
+                 skip_expr_matrix = TRUE,
+                 description = list(    
+                   title = "SHH model with human SHH tumors  ",
+                   description = "scRNA-seq on mouse model integrated with human SHH tumors. There are three umap projections  \n1) umap: No integration  \n2) umap_harmony: Integration was performed by species  \n3) umap_harmony_upn: Integration was performed by UPN"
+                 ),
+                 config = list(priority = 8, radius = 2, alpha = 0.3)
+                 )
+```
+
+## Mouse only normal cells
+```{r}
+so <- qread(file.path("objects",
+                  "mouse",
+                  "shh",
+                  "normal_immune",
+                  "shh_sobj.qs"))
+
+cols_to_keep <- c(
+  `genes per cell` = "nFeature_RNA",
+  `UMIs per cell` = "nCount_RNA",
+  `percent of UMIs as mitochondria` = "percent.mt",
+  `clusters` = "clusters",
+  `sample` = "orig.ident",
+   cell_type = "cell_types",
+   `cell cycle phase` = "Phase"
+  )
+
+make_cellbrowser(so, 
+                 column_list = cols_to_keep,
+                 secondary_cols = c(
+                    "sample",
+                    "cell_type",
+                    "cell cycle phase"), 
+                 project = "shh_model_mouse_immune",
+                 outdir = cb_outdir,
+                 marker_file = "markers/mouse/shh/normal_immune/shh_celltype_cluster_markers.tsv",
+                 ident = "cell_type",
+                 embeddings = def_embeddings(so),
+                 skip_expr_matrix = FALSE,
+                 description = list(    
+                   title = "SHH medulloblastoma mouse model ",
+                   description = "scRNA-seq on mouse model. Immune cells reclustered. Epithelial cell cluster excluded. No harmony integration performed"
+                 ),
+                 config = list(priority = 9))
+```
+
+# Build all 
+
+```{r}
+datasets <- c(
+   "group3_model_myc_dnp53_mouse",
+   "group3_model_myc_dnp53_mouse_and_gp34_human",
+   "group3_model_myc_dnp53_mouse_immune",
+   "group3_model_myc_gfi1_mouse",
+   "group3_model_myc_gfi1_mouse_and_gp34_human",
+   "group3_model_myc_gfi1_mouse_immune",
+   "shh_model",
+   "shh_model_with_shh_human",
+   "shh_model_mouse_immune"
+)
+
+datasets <- file.path(cb_outdir, datasets, "cellbrowser.conf")
+
+build_cellbrowser(datasets, outdir = file.path(cb_outdir, "mblast_mouse"))
+
+```
+
+
+
+
+

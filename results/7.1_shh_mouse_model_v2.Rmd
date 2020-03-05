@@ -1,0 +1,833 @@
+---
+title: "SHH mouse model"
+author: "Kent Riemondy RBI"
+date: "`r Sys.Date()`"
+knit: (function(inputFile, encoding) {
+  rmarkdown::render(inputFile, encoding = encoding, output_dir = "html") })
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_collapsed: false
+    theme: cosmo
+    highlight: tango
+    fig_caption: true
+    code_folding: hide
+    df_print: paged
+---
+
+```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
+source(here::here("/R/utils.R"))
+
+rmd_dir <- file.path("mouse", "shh")
+
+fig_dir <- file.path(fig_dir, rmd_dir)
+mkrs_dir <- file.path(mkrs_dir, rmd_dir)
+tbls_dir <- file.path(tbls_dir, rmd_dir)
+obj_dir <- file.path(obj_dir, rmd_dir)
+
+walk(c(fig_dir, mkrs_dir, tbls_dir, obj_dir),
+     dir.create, showWarnings = F)
+
+
+seed_value <- 20200304
+```
+
+## Get ortholog table
+
+Download list of orthologs between mouse and human as gene symbols.
+
+```{r}
+ortholog_table <- "../dbases/mouse_orthologs.tsv"
+
+if(!file.exists(ortholog_table)){
+  library(biomaRt)
+  ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+  
+  orthologs <- getBM(mart = ensembl, 
+      attributes = c("external_gene_name",
+                     "mmusculus_homolog_associated_gene_name"))
+  
+  write_tsv(orthologs, ortholog_table)
+}
+
+orthologs <- read_tsv(ortholog_table)
+
+orthologs <- filter(orthologs,
+                            !is.na(mmusculus_homolog_associated_gene_name)) %>% 
+  group_by(external_gene_name) %>% 
+  mutate(n_orthos_h = n()) %>% 
+  group_by(mmusculus_homolog_associated_gene_name) %>% 
+  mutate(n_orthos_m = n()) %>% 
+  filter(n_orthos_h == 1, n_orthos_m == 1) %>% 
+  select(-starts_with("n_orthos")) %>% 
+  ungroup()
+
+orthologs <- mutate(orthologs, 
+                    ortho_id = str_c(external_gene_name, ":",
+                                     mmusculus_homolog_associated_gene_name))
+
+cc_mouse_genes <- map(cc.genes.updated.2019, 
+                      ~tibble(external_gene_name = .x) %>% 
+                        left_join(orthologs, by = "external_gene_name") %>% 
+                        na.omit() %>% 
+                        pull(mmusculus_homolog_associated_gene_name))
+```
+
+>
+For the mouse samples
+MP control and MP luc-GFP are similar and both from MP (MYC + DNP53 expression in CD133+ cells) tumor models expressing luciferase. (DN= dominant negative p53)
+MG CD2 luc is the second model (MYC + GFI1 expression in CD133+ cells).
+>
+
+10.1016/j.ccr.2011.12.021
+
+
+## Samples
+
+```{r get_data}
+samples <- c(
+  "MED9_1",
+  "MED11_2",
+  "MED21_3")
+  
+sample_paths <- file.path(data_dir,
+                          samples,
+                          "outs", 
+                          "filtered_feature_bc_matrix")
+
+names(sample_paths) <- samples
+
+mat <- Read10X(sample_paths)
+
+so <- CreateSeuratObject(
+  mat,
+  min.cells = 3,
+  min.features = 200,
+  names.delim = "_",
+  names.field = c(1, 2)
+)
+
+so@meta.data <- so@meta.data %>% 
+  tibble::rownames_to_column("cell") %>% 
+  mutate(UPN = orig.ident) %>% 
+  as.data.frame() %>% 
+  tibble::column_to_rownames("cell")
+
+
+rm(mat)
+a <- gc()
+```
+
+
+# SHH
+
+```{r}
+
+seed_value <- 20200301
+res_settings <- c(0.1, 0.2, 0.3, 0.4, 0.5, 0.6)
+so <- PercentageFeatureSet(so, pattern = "^mt-", 
+                       col.name = "percent.mt") 
+
+so <- subset(so, subset = percent.mt < 30) %>%
+  NormalizeData(verbose = FALSE) %>% 
+  FindVariableFeatures(selection.method = "vst", 
+                       nfeatures = 3000, 
+                       verbose = FALSE) %>% 
+  ScaleData(verbose = FALSE) %>% 
+  RunPCA(npcs = 40, 
+         verbose = FALSE, 
+         seed.use = seed_value) %>% 
+  FindNeighbors(reduction = "pca", 
+                dims = 1:30,
+                verbose = FALSE) %>% 
+  RunUMAP(dims = 1:30,
+          min.dist = 0.3,
+          seed.use = seed_value,
+          verbose = FALSE) %>% 
+  FindClusters(resolution = res_settings,
+               verbose = FALSE) %>% 
+  CellCycleScoring(s.features = cc_mouse_genes$s.genes,
+                   g2m.features = cc_mouse_genes$g2m.genes) 
+
+
+so$seurat_clusters <- NULL
+```
+
+```{r}
+cluster_cols <- str_subset(colnames(so@meta.data), "res")
+
+plts <- plot_umap(so, cluster_cols)
+names(plts) <- cluster_cols
+
+iwalk(plts, 
+    ~save_plot(file.path(fig_dir, 
+                         paste0("umap_shh_by_", .y, ".pdf")),
+          .x, 
+          base_asp = 1))
+
+plt <- plot_grid(plotlist = plts,
+                 nrow = 2, 
+                 ncol = 3)
+
+save_plot(file.path(fig_dir, 
+                         paste0("umap_shh_all_clusters.pdf")),
+          plt,
+          nrow = 2, 
+          ncol = 3, 
+          base_asp = 1.5)
+plt
+```
+
+
+```{r}
+so$clusters <- so$RNA_snn_res.0.3
+
+library(presto)
+
+mkrs <- get_marker_summaries(so, 
+                             "clusters",
+                             prefix = "shh",
+                     tsv_output_dir = mkrs_dir,
+                     xlsx_output_dir = tbls_dir)
+mkrs
+```
+
+
+```{r}
+top_features <- mkrs$mkrs %>%  
+  ungroup() %>% 
+  mutate(group = as.factor(as.integer(group))) %>% 
+  group_by(group) %>% 
+  dplyr::slice(1:10) %>% 
+  pull(feature) %>% 
+  unique()
+
+tmp_so <- so[top_features, ] %>% 
+  ScaleData(features = top_features)
+
+p <- DoHeatmap(tmp_so, 
+               group.colors = discrete_palette_default,
+               features = top_features,
+               group.by = "clusters",
+               angle = 0, 
+               raster = FALSE, 
+               draw.lines = TRUE) +
+  scale_fill_gradientn(colours = viridis::viridis(256),
+                       name = "Expression\nZ-scores")
+
+save_plot(file.path(fig_dir, "heatmap_markers_shh.pdf"), 
+          p,
+          base_width = 10,
+          base_height = 12)
+
+p
+```
+
+
+Assign cell_types with clustifyr
+
+```{r}
+library(clustifyr)
+library(ComplexHeatmap)
+tm_average <- readRDS("/Users/kriemo/Projects/sc_repos/vanotterloo/data/tabula_muris/TM_avg_expr.rds")
+
+mdata <- get_metadata(so)
+
+res <- clustify(so@assays$RNA@data, 
+                tm_average, 
+                query_genes = so@assays$RNA@var.features,
+                metadata = mdata, 
+                cluster_col = "clusters", 
+                compute_method = "spearman")
+
+hmap <- Heatmap(t(res), 
+                viridis::viridis(256), 
+                "Spearman\ncorrelation",
+                row_title = "Cell types from Tabula Muris",
+                column_title = "Clusters")
+
+hmap
+
+top_cell_types <- cor_to_call(res, threshold = 0.7)
+
+so@meta.data <- so@meta.data %>% 
+  tibble::rownames_to_column("cell") %>% 
+  left_join(top_cell_types, 
+            by = c("clusters" = "cluster")) %>% 
+  dplyr::rename(tabula_muris_cell_type = type,
+                cor_value = r) %>% 
+  tibble::column_to_rownames("cell")
+
+pdf(file.path(fig_dir, "heatmap_cell_type_cor_shh.pdf"), 
+          width = 10,
+          height = 12)
+draw(hmap)
+dev.off()
+
+```
+
+
+### fix cell type assignments
+
+
+```{r}
+plot_umap(so, c("clusters", "tabula_muris_cell_type"), label_text = TRUE)
+```
+
+
+```{r}
+new_ids <- c(
+  "10" = "monocyte",
+  "5" = "myeloid",
+  "1" = "endothelial",
+  "6" = "fibroblasts",
+  '7' = "neuroendocrine", # second most correlated cell type
+  '8' = "oligodendrocytes (Olig2+)", #olig1 expression
+  '12' = "astrocytes",
+  '11' = "oligodendrocytes (Mobp+)"
+)
+
+cids <- as.numeric(as.character(so$clusters)) %>% unique() %>% sort()
+
+others <- setdiff(cids, names(new_ids))
+other_ids <- rep("malignant", length(others))
+names(other_ids) <- as.character(others)
+
+new_ids <- c(new_ids, other_ids)
+
+so$cell_types <- new_ids[as.character(so$clusters)]
+```
+
+
+```{r}
+to_plot <- c("clusters", "cell_types", "tabula_muris_cell_type", "Phase") 
+plts <- plot_umap(so, to_plot, label_text = TRUE, label_color = "black")
+names(plts) <- to_plot
+plts 
+
+iwalk(plts, 
+    ~save_plot(file.path(fig_dir, 
+                         paste0("umap_shh_by_", .y, ".pdf")),
+          .x, 
+          base_asp = 1.2))
+
+```
+
+## Add in Northcutt paper metamodule scores
+
+```{r}
+so@meta.data <- so@meta.data[!str_detect(colnames(so@meta.data),
+                                         "^SHH-")]
+
+if(!file.exists("../docs/northcutt_sup_tbl_2.xlsx")){
+  supp_tbl_2 <- "https://static-content.springer.com/esm/art%3A10.1038%2Fs41586-019-1434-6/MediaObjects/41586_2019_1434_MOESM3_ESM.xlsx"
+
+  download.file(supp_tbl_2, "../docs/northcutt_sup_tbl_2.xlsx")
+}
+
+sup_tbl <- read_excel("../docs/northcutt_sup_tbl_2.xlsx", 
+           sheet = 2,
+           skip = 3) 
+
+sup_tbl[, 1] <- NULL
+
+# extract out each metaprogram following their approach of excluding ribosomal
+# and protein genes and non-coding RNAs
+
+mps <- map(seq(1, ncol(sup_tbl), 2), 
+    ~c(.x, .x + 1)) %>% 
+  map(., ~sup_tbl[, .x] 
+      %>% na.omit()) 
+
+mp_names <- map_chr(mps, ~colnames(.x)[2])
+mps <- map(mps, ~.x[, 2, drop = TRUE]) 
+names(mps) <- mp_names
+
+mps <- map(mps, 
+    ~left_join(tibble(gene = .x),
+               orthologs, 
+               by = c("gene" = "external_gene_name")) %>% 
+      pull(mmusculus_homolog_associated_gene_name) %>% 
+      na.omit())
+
+ssh_mps <- mps[str_subset(names(mps), "SHH")]
+
+mp_ids <- c(
+  "SHH-A-cell_cycle",
+  "SHH-B-SHH_signaling",
+  "SHH-C-Differentiation"
+)
+
+names(ssh_mps) <- mp_ids
+
+for (i in seq_along(ssh_mps)){
+  so <- AddModuleScore(so, 
+                       features = list(c(ssh_mps[[i]])),
+                       ctrl = 50,
+                       name = names(ssh_mps)[i],
+                       seed = 42)
+}
+
+new_ids <- str_c(make.names(mp_ids), "1") 
+
+new_id_idx <- match(new_ids, colnames(so@meta.data))
+colnames(so@meta.data)[new_id_idx] <- mp_ids
+  
+names(mp_ids) <- paste0("Hovestadt_et_al_", mp_ids)
+
+plts <- imap(mp_ids,
+            ~plot_feature(so, 
+               .x, 
+               embedding = "umap", 
+               show_negative = TRUE,
+               minimal_theme = TRUE) + 
+              labs(title = .y))
+
+out_ids <- names(plts) %>% 
+  str_split(., "-") %>% 
+  map_chr(., ~str_c(.x[1:2], collapse = "-")) 
+
+walk2(plts, out_ids, 
+    ~save_plot(file.path(fig_dir, 
+                         paste0("umap_shh_by_", .y, ".pdf")),
+          .x, 
+          base_asp = 1.0))
+
+
+```
+
+## Add our cluster modules
+
+Using top marker genes found in our grp34 human clusters, assign scores to mouse model. 
+
+```{r}
+human_markers <- read_tsv(file.path("markers", "shh",  "harmony_markers_shh.tsv"))
+
+# top 50 marker genes for modules and get mouse ortholog
+human_modules <- filter(human_markers, padj < 0.05) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC), .by_group = TRUE) %>% 
+  left_join(orthologs, by = c("feature" = "external_gene_name")) %>% 
+  na.omit() %>% 
+  group_by(group) %>% 
+  slice(1:50) %>% 
+  split(., .$group) %>% 
+  map(., ~pull(.x, mmusculus_homolog_associated_gene_name))
+
+# dont't name anything with "luster" or "ouvain", as will not
+# be recognized as float by ucsc cellbrowser...
+
+names(human_modules) <- paste0("shh_signatures_clust_",
+                               unique(human_markers$group))
+
+so <- AddModuleScore(so, 
+                     features = human_modules,
+                     ctrl = 50,
+                     name = "tmp_",
+                     seed = 42)
+
+new_cols <- paste0("tmp_", 1:length(unique(human_markers$group)))
+new_col_idx <- match(new_cols, colnames(so@meta.data))
+better_cols <- names(human_modules)
+
+# fix column names
+colnames(so@meta.data)[new_col_idx] <- better_cols
+
+names(better_cols) <- better_cols
+
+plt <- imap(better_cols, 
+    ~plot_umap(so, .x,
+               show_negative = TRUE, 
+               legend_title = "") + 
+      labs(title = .y)) %>% 
+  plot_grid(plotlist = ., 
+            nrow = 3,
+            ncol = 2)
+
+plt 
+
+save_plot(file.path(fig_dir, 
+                    "umap_shh_by_gp3_human_signatures.pdf"),
+          plt, 
+          base_asp = 1.4 ,
+          nrow = 3,
+          ncol = 2)
+```
+
+### Write out metadata
+
+
+```{r} 
+mdata_out <- get_metadata(so)
+outname <- file.path(tbls_dir, 
+                     paste0("shh_metadata_", 
+                            format(Sys.Date(), "%Y_%m_%d"), 
+                            ".tsv.gz"))
+write_tsv(mdata_out, outname)
+```
+
+## save object
+
+```{r}
+qsave(so, file.path(obj_dir,"shh_sobj.qs"))
+```
+
+# Integrate with human
+
+
+```{r}
+so <- qread(file.path(obj_dir,"shh_sobj.qs"))
+
+int_dir <- "human_integrated"
+fig_dir <- file.path(fig_dir, int_dir)
+mkrs_dir <- file.path(mkrs_dir, int_dir)
+tbls_dir <- file.path(tbls_dir, int_dir)
+obj_dir <- file.path(obj_dir, int_dir)
+
+walk(c(fig_dir, mkrs_dir, tbls_dir, obj_dir),
+     dir.create, showWarnings = F)
+
+```
+
+```{r load_human_dat}
+so_m <- subset(so, subset = cell_types %in% c("malignant"))
+so_h <- qread(file.path("objects", "shh", "shh.qs"))
+```
+
+```{r covert mouse to human orths}
+# use shared genes based on ortholog table
+count_mat <- so_m@assays$RNA@counts
+norm_mat <- so_m@assays$RNA@data
+
+new_gids <- left_join(tibble(genes = rownames(count_mat)),
+                      orthologs, 
+                      by = c("genes" = "mmusculus_homolog_associated_gene_name"))
+  
+
+genes_to_keep <- which(!is.na(new_gids$external_gene_name))
+
+count_mat <- count_mat[genes_to_keep, ]
+norm_mat <- norm_mat[genes_to_keep, ]
+
+rownames(count_mat) <- new_gids$external_gene_name[genes_to_keep]
+rownames(norm_mat) <- new_gids$external_gene_name[genes_to_keep]
+
+so_m <- CreateSeuratObject(count_mat, 
+                   meta.data = so_m@meta.data)
+
+so_m <- SetAssayData(so_m, "data", new.data = norm_mat)
+
+shared_ids <- intersect(rownames(so_m), rownames(so_h))
+
+so_m <- so_m[shared_ids, ]
+so_h <- so_h[shared_ids, ]
+
+so_m$subgroup <- ifelse(str_detect(so_m$UPN, "^MED"),
+                        "shh_model",
+                        ifelse(so_m$UPN == "2_MP",
+                               "shh_model",
+                               ifelse(
+                               so_m$UPN == "3_MG",
+                               "MYC_GFI1_model",
+                               NA)))
+  
+so_m$species <- "mouse"
+so_h$species <- "human"
+
+so <- merge(so_h, so_m)
+
+rm(so_h, so_m)
+```
+
+
+```{r}
+res_settings <- c(0.1, 0.2, 0.3, 0.4, 0.5, 0.6)
+so <- FindVariableFeatures(so, 
+                       selection.method = "vst", 
+                       nfeatures = 3000, 
+                       verbose = FALSE) %>% 
+  ScaleData(verbose = FALSE) %>% 
+  RunPCA(npcs = 40, 
+         verbose = FALSE, 
+         seed.use = seed_value) %>% 
+  FindNeighbors(reduction = "pca", 
+                dims = 1:30,
+                verbose = FALSE) %>% 
+  RunUMAP(dims = 1:30,
+          min.dist = 0.3,
+          seed.use = seed_value,
+          verbose = FALSE) %>% 
+  FindClusters(resolution = res_settings,
+               verbose = FALSE) 
+
+so$seurat_clusters <- NULL
+```
+
+
+
+```{r}
+to_plot <- c("species", "subgroup")
+plts <- plot_umap(so, to_plot) 
+names(plts) <- to_plot
+
+iwalk(plts, 
+    ~save_plot(file.path(fig_dir, 
+                         paste0("umap_shh_by_", .y, ".pdf")),
+          .x, 
+          base_asp = 1.5))
+
+plt <- plot_grid(plotlist = plts,
+                 nrow = 1, 
+                 ncol = 2)
+
+save_plot(file.path(fig_dir, 
+                    paste0("umap_shh_summary.pdf")),
+          plt,
+          nrow = 1, 
+          ncol = 2, 
+          base_asp = 1.5)
+plt
+```
+
+## Harmonize by sample
+
+```{r}
+library(harmony)
+so <- RunHarmony(so, group.by.vars = "UPN", 
+                 reduction.save = "harmony_upn")
+
+so <- RunUMAP(so,
+              reduction = "harmony_upn",
+              dims = 1:30,
+              reduction.name = "harmony_umap_upn")
+
+so <- FindNeighbors(so,
+                    reduction = "harmony_upn",
+                    dims = 1:20)
+
+to_plot <- c("species", "subgroup", "coarse_clusters_shh_harmony")
+plts <- plot_feature(so, 
+                     to_plot, 
+                     sorted = "random", 
+                     embedding = "harmony_umap_upn") 
+names(plts) <- to_plot
+
+iwalk(plts, 
+    ~save_plot(file.path(fig_dir, 
+                         paste0("harmony_upn_umap_shh_by_", .y, ".pdf")),
+          .x, 
+          base_asp = 1.5))
+
+plt <- plot_grid(plotlist = plts,
+                 nrow = 1, 
+                 ncol = 2)
+
+save_plot(file.path(fig_dir, 
+                    paste0("harmony_upn_umap_shh_summary.pdf")),
+          plt,
+          nrow = 1, 
+          ncol = 2, 
+          base_asp = 1.5)
+plt
+
+```
+
+## Harmonize by species
+
+```{r}
+so <- RunHarmony(so, group.by.vars = "species")
+so <- RunUMAP(so,
+              reduction = "harmony",
+              dims = 1:30,
+              reduction.name = "harmony_umap")
+so <- FindNeighbors(so,
+                    reduction = "harmony",
+                    dims = 1:20)
+
+to_plot <- c("species", "subgroup", "coarse_clusters_shh_harmony")
+plts <- plot_harmony(so, to_plot) 
+names(plts) <- to_plot
+
+iwalk(plts, 
+    ~save_plot(file.path(fig_dir, 
+                         paste0("harmony_species_umap_shh_by_", .y, ".pdf")),
+          .x, 
+          base_asp = 1.5))
+
+plt <- plot_grid(plotlist = plts,
+                 nrow = 1, 
+                 ncol = 2)
+
+save_plot(file.path(fig_dir, 
+                    paste0("harmony_species_umap_shh_summary.pdf")),
+          plt,
+          nrow = 1, 
+          ncol = 2, 
+          base_asp = 1.5)
+plt
+```
+
+## save object
+
+```{r}
+qsave(so, file.path(obj_dir,"human_shh_sobj.qs"))
+```
+
+
+
+
+# Extract out immune / normal cells
+
+```{r}
+source(here::here("/R/utils.R"))
+int_dir <- rmd_dir <- file.path("mouse", "shh", "normal_immune")
+fig_dir <- file.path(fig_dir, int_dir)
+mkrs_dir <- file.path(mkrs_dir, int_dir)
+tbls_dir <- file.path(tbls_dir, int_dir)
+obj_dir <- file.path(obj_dir, int_dir)
+
+walk(c(fig_dir, mkrs_dir, tbls_dir, obj_dir),
+     dir.create, showWarnings = F)
+```
+
+```{r}
+so <- qread("objects/mouse/shh/shh_sobj.qs")
+
+so <- subset(so, subset = cell_types %in% c("myeloid", "monocyte"))
+
+res_settings <- seq(0.1, 0.7, 0.1)
+so <- FindVariableFeatures(so, nfeatures = 3000) %>% 
+  ScaleData(verbose = FALSE) %>% 
+  RunPCA(npcs = 40, 
+         verbose = FALSE, 
+         seed.use = seed_value) %>% 
+  FindNeighbors(reduction = "pca", 
+                dims = 1:20,
+                verbose = FALSE) %>% 
+  RunUMAP(dims = 1:20,
+          min.dist = 0.3,
+          seed.use = seed_value,
+          verbose = FALSE) %>% 
+  FindClusters(resolution = res_settings,
+               random.seed = seed_value,
+               verbose = FALSE)
+```
+
+```{r}
+cluster_cols <- str_subset(colnames(so@meta.data), "RNA_snn_res")
+
+plts <- plot_umap(so, cluster_cols)
+names(plts) <- cluster_cols
+
+iwalk(plts, 
+    ~save_plot(file.path(fig_dir, 
+                         paste0("umap_shh_by_", .y, ".pdf")),
+          .x, 
+          base_asp = 1))
+
+plt <- plot_grid(plotlist = plts,
+                 nrow = 3, 
+                 ncol = 3)
+
+save_plot(file.path(fig_dir, 
+                         paste0("umap_shh_all_clusters.pdf")),
+          plt,
+          nrow = 3, 
+          ncol = 3, 
+          base_asp = 1.5)
+plt
+```
+
+
+```{r}
+so$clusters <- so$RNA_snn_res.0.5
+
+library(presto)
+
+mkrs <- get_marker_summaries(so, 
+                             "clusters",
+                             prefix = "myc_gfi1",
+                             tsv_output_dir = mkrs_dir,
+                             xlsx_output_dir = tbls_dir)
+mkrs
+```
+
+Assign cell_types with clustifyr
+
+```{r}
+library(clustifyr)
+library(ComplexHeatmap)
+tm_average <- readRDS("/Users/kriemo/Projects/sc_repos/vanotterloo/data/tabula_muris/TM_avg_expr.rds")
+
+mdata <- get_metadata(so)
+
+res <- clustify(so@assays$RNA@data, 
+                tm_average, 
+                query_genes = so@assays$RNA@var.features,
+                metadata = mdata, 
+                cluster_col = "clusters", 
+                compute_method = "spearman")
+
+hmap <- Heatmap(t(res), 
+                viridis::viridis(256), 
+                "Spearman\ncorrelation",
+                row_title = "Cell types from Tabula Muris",
+                column_title = "Clusters")
+
+hmap
+
+top_cell_types <- cor_to_call(res, threshold = 0.5)
+
+so@meta.data <- so@meta.data %>% 
+  tibble::rownames_to_column("cell") %>% 
+  left_join(top_cell_types, 
+            by = c("clusters" = "cluster")) %>% 
+  dplyr::mutate(tabula_muris_cell_type = type,
+                cor_value = r) %>% 
+  dplyr::select(-type, -r) %>% 
+  tibble::column_to_rownames("cell")
+
+pdf(file.path(fig_dir, "heatmap_cell_type_cor_myc_shh.pdf"), 
+          width = 10,
+          height = 12)
+draw(hmap)
+dev.off()
+
+
+
+p <- plot_umap(so, "tabula_muris_cell_type")
+save_plot(file.path(fig_dir,"umap_shh_by_tm_cell_type.pdf"),
+          p, 
+          base_asp = 1.5)
+p
+```
+
+Tweak cell type assignments
+
+```{r}
+new_ids <- c(
+  "0" = "macrophage"
+)
+
+so$cell_types <- ifelse(as.character(so$clusters) %in% names(new_ids),
+                        new_ids[as.character(so$clusters)],
+                        so$tabula_muris_cell_type)
+
+plot_umap(so, "cell_types")
+```
+
+```{r}
+mkrs <- get_marker_summaries(so, 
+                             "cell_types",
+                             prefix = "shh_celltype",
+                             tsv_output_dir = mkrs_dir,
+                             xlsx_output_dir = tbls_dir)
+mkrs
+```
+
+## save object
+
+```{r}
+qsave(so, file.path(obj_dir,"shh_sobj.qs"))
+```

@@ -70,25 +70,42 @@ orthologs <- mutate(orthologs,
 ## Examine conservation with human SHH tumors
 
 ```{r}
-so <- readRDS(file.path(obj_dir,"shh", "shh_model_sobj.rds"))
+h_so <- qread("objects/shh/shh.qs")
+m_so <- qread("objects/mouse/shh/shh_model_so.qs")
+m_so <- subset(m_so, subset = cell_types == "malignant")
+m_so <- CellCycleScoring(m_so,
+                         s.features = cc.genes$s.genes,
+                         g2m.features = cc.genes$g2m.genes)
 
-so <- subset(so, subset = cell_types == "malignant")
+mats <- set_shared_orthologs(h_so, m_so, orthologs)
+
+h_so_orth <- CreateSeuratObject(mats[[1]], 
+                                meta.data = get_metadata(h_so) %>%
+                                  mutate(species = "human") %>% 
+    select(cell, UPN, coarse_clusters_shh_harmony, species,
+           Phase, `SHH-A-cell_cycle`:`SHH-C-Differentiation`) %>%
+      tibble::column_to_rownames("cell"))
+
+m_so_orth <- CreateSeuratObject(mats[[2]], 
+                                meta.data = get_metadata(m_so) %>%
+                                  mutate(species = "mouse") %>% 
+    select(cell, UPN, species) %>%
+      tibble::column_to_rownames("cell"))
+
+so <- merge(h_so_orth, m_so_orth)
 
 so <- FindVariableFeatures(so, 
                            selection.method = "vst", 
                            nfeatures = 3000, 
                            verbose = FALSE)
 
-so <- ScaleData(so, 
-                verbose = TRUE)
+so <- ScaleData(so, verbose = TRUE)
 
 so <- RunPCA(so, npcs = 40, verbose = FALSE, seed.use = seed_value)
 
 ElbowPlot(so, ndims = 40)
 
-so <- FindNeighbors(so, 
-                    reduction = "pca", 
-                    dims = 1:30)
+so <- FindNeighbors(so, reduction = "pca", dims = 1:30)
 
 so <- RunUMAP(so, 
               graph = "RNA_snn", 
@@ -98,100 +115,167 @@ so <- RunUMAP(so,
 
 so <- FindClusters(so, resolution = 0.3, random.seed = seed_value)
 
-
 so$malignant_clusters<- so$seurat_clusters
-so$seurat_clusters <- NULL
-so$RNA_snn_res.0.3 <- NULL
-plot_umap(so, "malignant_clusters")
 
-mkrs <- wilcoxauc(so, "malignant_clusters")
+library(harmony)
 
-mkrs <- filter(mkrs, logFC > 0, padj < 0.05) %>% 
+so <- RunHarmony(so, 
+                 group.by.vars = "UPN",
+                 theta = 2)
+
+so <- RunUMAP(so,
+              reduction = "harmony",
+              dims = 1:30,
+              reduction.name = "harmony_umap")
+
+so <- FindNeighbors(so,
+                    reduction = "harmony",
+                    dims = 1:30)
+
+so <- FindClusters(so, resolution = 0.3, random.seed = seed_value)
+
+
+to_plot <- c(
+  "species",
+  "UPN",
+  "Phase",
+  "SHH.A.cell_cycle",
+  "SHH.B.SHH_signaling",
+  "SHH.C.Differentiation",
+  "RNA_snn_res.0.3"
+)
+so$SHH.A.cell_cycle[is.na(so$SHH.A.cell_cycle)] <- 0
+so$SHH.B.SHH_signaling[is.na(so$SHH.B.SHH_signaling)] <- 0
+so$SHH.C.Differentiation[is.na(so$SHH.C.Differentiation)] <- 0
+plot_harmony(so, to_plot)
+```
+
+
+```{r}
+plot_harmony(so, "RNA_snn_res.0.3", group = "species")
+```
+
+
+```{r}
+
+mkrs <- wilcoxauc(so, "RNA_snn_res.0.3") %>% 
+  filter(padj < 0.01, logFC > 0, pct_in > 10)
+
+View(mkrs %>% 
   group_by(group) %>% 
-  arrange(padj, desc(logFC), .by_group = TRUE)
+  arrange(padj, desc(logFC), .by_group = TRUE) %>% 
+  slice(1:25))
 
-mkrs %>% 
-  write_tsv(file.path(mkrs_dir, "shh", 
-                      "shh_neoplastic_cluster_markers.tsv"))
-
-mkrs %>% 
-  ungroup() %>% 
-  split(., .$group) %>% 
-  write_markers_xlsx(.,
-                     file.path(tbls_dir, "shh",
-                               "shh_neoplastic_cluster_markers.xlsx"))
-
+View(mkrs %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC), .by_group = TRUE) %>% 
+  filter(group == 0))
 ```
 
 
-Get human shh data
+## Examine conservation with human group3/4 tumors
 
 ```{r}
-h_so <- readRDS(file.path("objects","shh","shh.rds"))
-```
+h_so <- qread("objects/gp34/gp34.qs")
+m_so <- qread("objects/mouse/gp34/gp3_models_sobj.qs")
+m_so <- subset(m_so, subset = cell_types == "malignant")
 
-Get Variable genes
-```{r}
-mouse_var_genes <- FindVariableFeatures(so, 
+mats <- set_shared_orthologs(h_so, m_so, orthologs)
+
+h_so_orth <- CreateSeuratObject(mats[[1]], 
+                                meta.data = get_metadata(h_so) %>%
+                                  mutate(species = "human") %>% 
+    select(cell, UPN, coarse_clusters_gp34_harmony, species,
+           Phase, `Group 3/4-A-cell_cycle`:`Phase`) %>%
+      tibble::column_to_rownames("cell"))
+
+m_so_orth <- CreateSeuratObject(mats[[2]], 
+                                meta.data = get_metadata(m_so) %>%
+                                  mutate(species = "mouse") %>% 
+    select(cell, UPN, expt_ids, species, clusters:Phase,
+           `Group 3/4-A_cell_cycle`:`Group 3/4-C_Differentiation`) %>%
+      tibble::column_to_rownames("cell"))
+
+so <- merge(h_so_orth, m_so_orth)
+rm(mats)
+rm(h_so_orth)
+rm(m_so_orth)
+rm(h_so)
+rm(m_so)
+gc()
+
+so <- FindVariableFeatures(so, 
                            selection.method = "vst", 
                            nfeatures = 3000, 
-                           verbose = FALSE) %>% 
-  VariableFeatures() %>% 
-  tibble(mmusculus_homolog_associated_gene_name = .) %>% 
-  left_join(.,
-            orthologs,
-            by = "mmusculus_homolog_associated_gene_name") %>% 
-  pull(ortho_id) %>% 
-  na.omit() %>% 
-  unique()
+                           verbose = FALSE)
 
-human_var_genes <- VariableFeatures(h_so) %>% 
-    tibble(external_gene_name = .) %>% 
-  left_join(.,
-            orthologs,
-            by = "external_gene_name") %>% 
-  pull(ortho_id) %>% 
-  na.omit() %>% 
-  unique()
+so <- ScaleData(so, verbose = TRUE)
 
-var_genes <- union(mouse_var_genes, human_var_genes)
+so <- RunPCA(so, npcs = 40, verbose = FALSE, seed.use = seed_value)
+
+ElbowPlot(so, ndims = 40)
+
+so <- FindNeighbors(so, reduction = "pca", dims = 1:30)
+
+so <- RunUMAP(so, 
+              graph = "RNA_snn", 
+              min.dist = 0.3,
+              seed.use = seed_value
+)
+
+so <- FindClusters(so, resolution = 0.3, random.seed = seed_value)
+
+so$malignant_clusters<- so$seurat_clusters
+
+library(harmony)
+
+so <- RunHarmony(so, 
+                 group.by.vars = c("species", "UPN"),
+                 theta = 2)
+
+so <- RunUMAP(so,
+              reduction = "harmony",
+              dims = 1:30,
+              reduction.name = "harmony_umap")
+
+so <- FindNeighbors(so,
+                    reduction = "harmony",
+                    dims = 1:30)
+
+so <- FindClusters(so, resolution = 0.3, random.seed = seed_value)
 
 
+to_plot <- c(
+  "species",
+  "UPN",
+  "Phase",
+  "Group.3.4.A.cell_cycle",
+  "Group.3.4.B.Translation_Myc",
+  "Group.3.4.C.Differentiation"
+#  "malignant_clusters"
+)
+so$Group.3.4.A.cell_cycle[is.na(so$Group.3.4.A.cell_cycle)] <- 0
+so$Group.3.4.B.Translation_Myc[is.na(so$Group.3.4.B.Translation_Myc)] <- 0
+so$Group.3.4.C.Differentiation[is.na(so$Group.3.4.C.Differentiation)] <- 0
+p <- plot_harmony(so, to_plot)  
 
-# try marker genes
-m_mkrs <- filter(mkrs, logFC > 0, padj < 0.05) %>% 
-  group_by(group) %>% 
-  arrange(padj, desc(logFC), .by_group = TRUE) %>% 
-  dplyr::slice(1:500) %>% 
-  pull(feature) %>% 
-  tibble(mmusculus_homolog_associated_gene_name = .) %>% 
-  left_join(.,
-            orthologs,
-            by = "mmusculus_homolog_associated_gene_name") %>% 
-  pull(ortho_id) %>% 
-  na.omit() %>% 
-  unique()
-
-h_mkrs <- read_tsv(file.path("markers", "shh", "harmony_markers_shh.tsv")) %>% 
-  filter(logFC > 0, padj < 0.05) %>% 
-  group_by(group) %>% 
-  arrange(padj, desc(logFC), .by_group = TRUE) %>% 
-  dplyr::slice(1:500) %>% 
-  pull(feature) %>% 
-  tibble(external_gene_name = .) %>% 
-  left_join(.,
-            orthologs,
-            by = "external_gene_name") %>% 
-  pull(ortho_id) %>% 
-  na.omit() %>% 
-  unique()
-
-var_genes <- union(m_mkrs, h_mkrs)
+names(p) <- to_plot
+iwalk(p, ~save_plot(file.path("~/Desktop/umap_art/", str_c(.y, 
+                                                           ".pdf")),
+                    .x,
+                    base_asp = 1))
 ```
 
 
 ```{r}
-mats <- set_shared_orthologs(h_so, so, orthologs)
+plot_harmony(so, "RNA_snn_res.0.3", group = "species")
+```
+
+
+
+
+```{r}
+mats <- set_shared_orthologs(h_so, m_so, orthologs)
 
 var_genes <- intersect(var_genes, map(mats, rownames) %>% unlist())
 names(mats) <- c("human", "mouse")
@@ -256,6 +340,20 @@ go_res[["result"]] %>%
   split(., .$query) %>% 
   openxlsx::write.xlsx(., file.path(tbls_dir, "shh", "goterms_gp34_cluster.xlsx"))
 ```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 # GP mouse model
