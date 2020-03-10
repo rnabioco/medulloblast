@@ -347,6 +347,102 @@ mkrs %>%
 qsave(so, 
       file.path(obj_dir, "all_neoplastic.qs"), 
       nthreads = 4)
+
+#so <- qread(file.path(obj_dir, "all_neoplastic.qs"))
 ```
 
 
+## Summarize subtype calls by UPN
+
+```{r}
+array_mdata <- read.table(file.path(doc_dir,
+                                    "microarray_data",
+                                    "2019_09_04_tidy_CEL_annotation_file_for_Cavalli_2012.txt"),
+                          stringsAsFactors = FALSE) %>% 
+  as_tibble() %>% 
+  mutate(Subtype = str_trim(Subtype))
+
+array_mat <- read.table(file.path(doc_dir,
+                                    "microarray_data",
+                                "2019_09_04_expression_data_all_medullo_Cavalli_GEO_numbers.txt"),
+                        stringsAsFactors = FALSE) %>% 
+  as_tibble()
+
+# average probesets
+expr_mat <- array_mat %>% 
+  gather("key", "value", -sym) %>% 
+  group_by(sym, key) %>% 
+  summarize(value = mean(value)) %>%
+  spread(key, value) %>%
+  as.data.frame() %>% 
+  column_to_rownames("sym") %>% 
+  as.matrix()
+
+# average probesets across subtypes
+avg_mat <- unique(array_mdata$Subtype) %>% 
+  map(function(x){
+    cols <- array_mdata[which(array_mdata$Subtype == x), 
+                   "GEO_number", 
+                   drop = TRUE]
+    
+    vals <- rowMeans(expr_mat[, cols])
+    res <- tibble(sym = names(vals))
+    res[[x]] <- vals
+    res
+    }) %>% 
+  Reduce(function(x, y) {left_join(x, y, by = "sym")}, .) %>% 
+  as.data.frame() %>% 
+  column_to_rownames("sym") %>% 
+  as.matrix()
+
+library(clustifyr)
+
+clust_res <- clustify(so, 
+                ref_mat = avg_mat,
+                cluster_col = "UPN", 
+                seurat_out = FALSE) 
+res <- clust_res %>% 
+  cor_to_call() %>% 
+  left_join(rownames_to_column(so@meta.data, "cell"), .,
+            by = c("UPN" = "cluster")) %>% 
+  dplyr::select(cell, 
+                subtype_upn = type, 
+                subtype_upn_cor = r) %>% 
+  as.data.frame() %>% 
+  column_to_rownames("cell")
+
+so <- AddMetaData(so, res)
+
+to_plot <- c(
+  "subgroup",
+  "UPN",
+  "subtype_upn"
+)
+
+p <- plot_umap(so, to_plot) %>% 
+  plot_grid(plotlist = ., nrow = 1, ncol = 3)
+
+save_plot(file.path(fig_dir, "umap_by_subtype_upn_summary.pdf"),
+          p,
+          nrow = 1,
+          ncol = 3, 
+          base_asp = 1.4)
+
+p
+
+upn_class <- get_metadata(so) %>% 
+  select(UPN, subgroup, subtype_upn) %>% 
+  unique() 
+
+clust_res <- clust_res %>% 
+  as.data.frame() %>% 
+  rownames_to_column("UPN")
+
+list("Subtype_transcriptome" = upn_class,
+     "Subtype_correlations" = clust_res) %>% 
+  openxlsx::write.xlsx(., 
+                       file.path(tbls_dir,
+                      "subtype_classification_per_tumor.xlsx"))
+
+
+```

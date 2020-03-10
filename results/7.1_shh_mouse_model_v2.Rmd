@@ -193,6 +193,22 @@ mkrs <- get_marker_summaries(so,
 mkrs
 ```
 
+## Markers just malignant
+
+
+```{r}
+so_sub <- subset(so, 
+                 subset = cell_types %in% c("malignant"))
+
+mkrs <- get_marker_summaries(so_sub, 
+                             "clusters",
+                             prefix = "shh_malignant",
+                     tsv_output_dir = mkrs_dir,
+                     xlsx_output_dir = tbls_dir)
+rm(mkrs)
+```
+
+
 
 ```{r}
 top_features <- mkrs$mkrs %>%  
@@ -455,6 +471,82 @@ save_plot(file.path(fig_dir,
           ncol = 2)
 ```
 
+## Calculate marker gene overlap
+
+```{r}
+library("GeneOverlap")
+
+mouse_markers <- read_tsv(file.path("markers", "mouse", "shh", "shh_malignant_cluster_markers.tsv")) %>% 
+filter(padj < 0.05) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC), .by_group = TRUE) %>% 
+  inner_join(orthologs, by = c("feature" = "mmusculus_homolog_associated_gene_name")) %>% 
+    slice(1:200) %>% 
+  split(., .$group) %>% 
+  map(~pull(.x, external_gene_name))
+
+human_markers <- read_tsv(file.path("markers", "shh",  "harmony_markers_shh.tsv")) %>% 
+  filter(padj < 0.05) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC), .by_group = TRUE) %>% 
+  semi_join(orthologs, by = c("feature" = "external_gene_name")) %>% 
+  slice(1:200) %>% 
+  split(., .$group) %>% 
+  map(~pull(.x, feature))
+
+
+gom_human_mouse <- newGOM(mouse_markers, 
+                       human_markers,
+                       genome.size = nrow(so))
+
+# extract overlaps
+pvals  <- getMatrix(gom_human_mouse, c("pval")) 
+pvals <- apply(pvals, 2, function(x) p.adjust(x, n = length(pvals)))
+
+jaccard <- getMatrix(gom_human_mouse, "Jaccard")
+odds <- getMatrix(gom_human_mouse, c("odds.ratio"))
+
+library(ComplexHeatmap)
+# clip really low pvals to avoid take log10 of 0)
+clip_val <- 1e-300
+  
+pvals[pvals < clip_val] <- clip_val
+pvals <- -log10(pvals)
+
+Heatmap(pvals,
+        name = "-log10(pvalue)", 
+        col = viridis::viridis(256),
+        row_title = "Mouse model markers",
+        column_title = "Human Group 3 and 4 markers")
+
+h <- Heatmap(jaccard,
+        name = "Jaccard index", 
+        col = viridis::viridis(256),
+       row_title = "SHH model clusters",
+        column_title = "Human SHH clusters",
+        cell_fun = function(j, i, x, y, width, height, fill) {
+          bin <- findInterval(pvals[i, j], c(-log10(0.01), 20, 200))
+          txt <- c("*", "**", "***")[bin]
+          grid.text(txt, x, y, gp = gpar(fontsize = 10, col = "white"))
+})
+
+
+lgd_list <-  list(
+    Legend(labels = c("*** < 1e-200",
+                      "** < 1e-20",
+                      "* < 1e-2"), 
+           title = "Adj. p.val")
+)
+draw(h, heatmap_legend_list = lgd_list)
+
+
+pdf(file.path(fig_dir, "Marker_overlap_shh_malignant_shh.pdf"),
+    width = 7,
+    height = 7)
+  draw(h, heatmap_legend_list = lgd_list)
+dev.off()
+```
+
 ### Write out metadata
 
 
@@ -471,6 +563,7 @@ write_tsv(mdata_out, outname)
 
 ```{r}
 qsave(so, file.path(obj_dir,"shh_sobj.qs"))
+#so <- qread(file.path(obj_dir,"shh_sobj.qs"))
 ```
 
 # Integrate with human
@@ -633,6 +726,112 @@ plt
 
 ```
 
+
+### Human signature overlap
+
+```{r}
+Idents(so) <- "UPN"
+mouse_model_cells <- WhichCells(so, 
+                                idents = c("MED9_1", "MED11_2", "MED21_3"))
+other_cells <- WhichCells(so,
+                          idents = c("MED9_1", "MED11_2", "MED21_3"), 
+                          invert = TRUE)
+
+library(RANN)
+kval <- 10
+ndims <- 1:20
+nn_vals <- nn2(
+  so@reductions$harmony_upn@cell.embeddings[other_cells, ndims],
+  so@reductions$harmony_upn@cell.embeddings[mouse_model_cells, ndims],
+  k = kval)
+    
+nn_cells <- tibble(
+  mouse_cell = rep(mouse_model_cells, each = kval),
+  n_idx = rep(1:kval, length(mouse_model_cells)),
+  human_neighbor = other_cells[nn_vals$nn.idx])
+
+nn_cells <- get_metadata(so, embedding = NULL) %>%
+  select(cell = cell, coarse_clusters_shh_harmony) %>% 
+  filter(cell %in% other_cells) %>% 
+  left_join(nn_cells, ., by = c("human_neighbor" = "cell"))
+
+nn_cell_summary <- nn_cells %>%
+  mutate(coarse_clusters_shh_harmony = factor(coarse_clusters_shh_harmony)) %>%
+  group_by(mouse_cell, coarse_clusters_shh_harmony, .drop = FALSE) %>% 
+  tally() %>% 
+  group_by(mouse_cell) %>% 
+  mutate(cluster_rank = rank(n, ties.method = "random")) %>%
+  arrange(desc(cluster_rank), .by_group = TRUE) %>% 
+  slice(1) %>% 
+  ungroup()
+```
+
+```{r}
+so_h <- qread(file.path("objects","shh", "shh.qs"))
+
+human_counts <- get_cell_count_matrix(so_h, 
+                      "UPN", 
+                      "coarse_clusters_shh_harmony")
+
+mouse_counts <- nn_cell_summary %>% 
+  group_by(coarse_clusters_shh_harmony, 
+                             .drop = FALSE) %>%
+  tally() %>% 
+  mutate(id = "Shh_mouse_model") %>% 
+  pivot_wider(names_from = "coarse_clusters_shh_harmony",
+              values_from = "n") %>% 
+  column_to_rownames("id")
+ 
+# use hclustering to order samples
+sample_order <- rownames(human_counts)[hclust(dist(human_counts / rowSums(human_counts)))$order]
+sample_order <- c(sample_order, "Shh_mouse_model")
+
+combined_counts <- rbind(human_counts,
+                             mouse_counts) %>% 
+  rownames_to_column("sample_id") %>% 
+  pivot_longer(cols = -sample_id)
+
+plt_dat <- group_by(combined_counts, sample_id) %>% 
+      mutate(n_cells = sum(value)) %>%
+      group_by(sample_id, name) %>%
+      summarize(prop_cell_type = value / unique(n_cells)) %>% 
+  ungroup() %>% 
+  mutate(sample_id = factor(sample_id, levels = sample_order))
+
+cell_summary <- group_by(combined_counts, sample_id) %>% 
+    mutate(n_cells = sum(value)) %>% 
+  ungroup() %>%
+  select(sample_id, name, n_cells) %>% 
+  mutate(n_cells = str_c("n = ", scales::comma(n_cells)),                                            n_cells = str_pad(n_cells, max(nchar(n_cells)), "right")) %>%
+    unique() %>% 
+   mutate(sample_id = factor(sample_id, levels = sample_order))
+
+p <- ggplot(plt_dat,
+            aes(sample_id, prop_cell_type)) +
+    geom_col(aes(fill = name)) +
+    labs(x = "Sample ID",
+         y = "Proportion of each cell type")  + 
+  scale_fill_manual(values = palette_OkabeIto) + 
+  labs(fill = "Human SHH\nclusters",
+       x = "") + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+          legend.position = "top",
+          strip.background = element_rect(fill = "white")) +
+  geom_text(data = cell_summary,
+            aes(x = sample_id, y = 0.15,
+                  label = n_cells),
+            angle = 90)
+
+p
+
+save_plot(file.path(fig_dir, "cell_proportions_in_human_shh_clusters.pdf"), 
+          p,
+          base_asp = 1.1,
+          base_height = 6)
+```
+
+
+
 ## Harmonize by species
 
 ```{r}
@@ -672,6 +871,7 @@ plt
 
 ```{r}
 qsave(so, file.path(obj_dir,"human_shh_sobj.qs"))
+#so <- qread(file.path(obj_dir,"human_shh_sobj.qs"))
 ```
 
 

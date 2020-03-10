@@ -163,7 +163,7 @@ so <- subset(so, subset = orig.ident == "2_MP") %>%
 so$seurat_clusters <- NULL
 ```
 
-### Annotate with gfp/luc reads
+## Annotate with gfp/luc reads
 
 ```{r count_gfp}
 count_transgenes <- function(sam_path, cb_prefix = "") {
@@ -272,6 +272,7 @@ save_plot(file.path(fig_dir,
 plt
 ```
 
+## Markers  per cluster
 
 ```{r}
 so$clusters <- so$RNA_snn_res.0.3
@@ -286,6 +287,20 @@ mkrs <- get_marker_summaries(so,
 mkrs
 ```
 
+## Markers just malignant
+
+
+```{r}
+so_sub <- subset(so, 
+                 subset = cell_types %in% c("malignant"))
+
+mkrs <- get_marker_summaries(so_sub, 
+                             "clusters",
+                             prefix = "myc_dnp53_malignant",
+                     tsv_output_dir = mkrs_dir,
+                     xlsx_output_dir = tbls_dir)
+rm(mkrs)
+```
 
 ```{r}
 top_features <- mkrs$mkrs %>%  
@@ -533,6 +548,82 @@ save_plot(file.path(fig_dir, "umap_gp34_myc_dnp53_by_gp3_human_signatures.pdf"),
           ncol = 2)
 ```
 
+## Calculate marker gene overlap
+
+```{r}
+library("GeneOverlap")
+
+mouse_markers <- read_tsv(file.path("markers", "mouse", "gp34", "myc_dnp53_malignant_cluster_markers.tsv")) %>% 
+filter(padj < 0.05) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC), .by_group = TRUE) %>% 
+  inner_join(orthologs, by = c("feature" = "mmusculus_homolog_associated_gene_name")) %>% 
+    slice(1:200) %>% 
+  split(., .$group) %>% 
+  map(~pull(.x, external_gene_name))
+
+human_markers <- read_tsv(file.path("markers", "gp34",  "harmony_markers_gp34.tsv")) %>% 
+  filter(padj < 0.05) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC), .by_group = TRUE) %>% 
+  semi_join(orthologs, by = c("feature" = "external_gene_name")) %>% 
+  slice(1:200) %>% 
+  split(., .$group) %>% 
+  map(~pull(.x, feature))
+
+
+gom_human_mouse <- newGOM(mouse_markers, 
+                       human_markers,
+                       genome.size = nrow(so_sub))
+
+# extract overlaps
+pvals  <- getMatrix(gom_human_mouse, c("pval")) 
+pvals <- apply(pvals, 2, function(x) p.adjust(x, n = length(pvals)))
+
+jaccard <- getMatrix(gom_human_mouse, "Jaccard")
+odds <- getMatrix(gom_human_mouse, c("odds.ratio"))
+
+library(ComplexHeatmap)
+# clip really low pvals to avoid take log10 of 0)
+clip_val <- 1e-300
+  
+pvals[pvals < clip_val] <- clip_val
+pvals <- -log10(pvals)
+
+Heatmap(pvals,
+        name = "-log10(pvalue)", 
+        col = viridis::viridis(256),
+        row_title = "Mouse model markers",
+        column_title = "Human Group 3 and 4 markers")
+
+h <- Heatmap(jaccard,
+        name = "Jaccard index", 
+        col = viridis::viridis(256),
+        row_title = "Myc + DNp53 model clusters",
+        column_title = "Human Group 3 and 4 clusters",
+        cell_fun = function(j, i, x, y, width, height, fill) {
+          bin <- findInterval(pvals[i, j], c(-log10(0.01), 20, 200))
+          txt <- c("*", "**", "***")[bin]
+          grid.text(txt, x, y, gp = gpar(fontsize = 10, col = "white"))
+})
+
+
+lgd_list <-  list(
+    Legend(labels = c("*** < 1e-200",
+                      "** < 1e-20",
+                      "* < 1e-2"), 
+           title = "Adj. p.val")
+)
+draw(h, heatmap_legend_list = lgd_list)
+
+
+pdf(file.path(fig_dir, "Marker_overlap_dnp53_malignant_gp34.pdf"),
+    width = 7,
+    height = 7)
+  draw(h, heatmap_legend_list = lgd_list)
+dev.off()
+```
+
 ### Write out metadata
 
 
@@ -549,6 +640,7 @@ write_tsv(mdata_out, outname)
 
 ```{r}
 qsave(so, file.path(obj_dir,"gp3_myc_dnp53_sobj.qs"))
+#so <- qread(file.path(obj_dir,"gp3_myc_dnp53_sobj.qs"))
 ```
 
 # Integrate with human
