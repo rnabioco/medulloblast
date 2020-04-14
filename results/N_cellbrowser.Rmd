@@ -77,6 +77,13 @@ make_cellbrowser(so,
 ```{r}
 so <- qread(file.path("objects", "preprocess", "all_neoplastic.qs"))
 
+so$tumor_cell_type_subgroup_specific <- ifelse(is.na( so$tumor_cell_type_subgroup_specific),
+                                                "not_classified",
+                                                so$tumor_cell_type_subgroup_specific) %>% 
+  str_replace_all(., ",", "")
+
+so$tumor_cell_types_all_subgroups <-  str_replace_all(so$tumor_cell_types_all_subgroups, ",", " ")
+
 cols_to_keep <- c(
   `genes per cell` = "nFeature_RNA",
   `UMIs per cell` = "nCount_RNA",
@@ -88,6 +95,9 @@ cols_to_keep <- c(
   `subtype` = "subtype",
   `subtype_aligned` = "subtype_aligned",
   `UPN` = "UPN",
+  `Cell Cycle Phase` = "Phase",
+  `Subgroup specific tumor cell types` = "tumor_cell_type_subgroup_specific",
+  `All subgroup tumor cell types` = "tumor_cell_types_all_subgroups",
   unaligned_cluster_diversity = "unaligned_cluster_diversity", 
   aligned_cluster_diversity = "aligned_cluster_diversity"
   )
@@ -98,15 +108,15 @@ make_cellbrowser(so,
             "subgroup"), 
                  project = "medulloblastoma_neoplastic",
                  outdir = cb_outdir,
-                 marker_file = "markers/preprocess/upn_markers_neoplastic.tsv",
-                 ident = "UPN",
+                 marker_file = "markers/preprocess/cluster_harmony_markers_neoplastic.tsv",
+                 ident = "aligned_clusters",
                  embeddings = def_embeddings(so),
                  skip_expr_matrix = TRUE,
                  config = list(priority = 2,  
                                radius = 2),
                  description = list(    
                    title = "Medulloblastoma Neoplastic cells",
-                   description = "Only neoplastic cells are shown, includes WNT subgroup. There are both unaligned and aligned projections"
+                   description = "Only neoplastic cells are shown, includes WNT subgroup. There are both unaligned and aligned projections. Includes cell type labels defined from examining all tumors in a harmonized projection, and cell types defined by harmonizing each subgroup independently."
                  )
 )
 
@@ -118,6 +128,9 @@ gc()
 
 ```{r}
 so <- qread(file.path("objects", "shh", "shh.qs"))
+
+so$tumor_cell_type_shh <- str_replace_all(so$tumor_cell_type_shh, ",", "")
+so$tumor_cell_types_all_subgroups <-  str_replace_all(so$tumor_cell_types_all_subgroups, ",", " ")
 
 cols_to_keep <- c(
   `genes per cell` = "nFeature_RNA",
@@ -136,7 +149,9 @@ cols_to_keep <- c(
   "CytoTRACE-GCS" = "GCS",
   "CytoTRACE-score" = "CytoTRACE",
   unaligned_cluster_diversity = "unaligned_cluster_diversity", 
-  aligned_cluster_diversity = "aligned_cluster_diversity"
+  aligned_cluster_diversity = "aligned_cluster_diversity",
+  `SHH tumor cell types` = "tumor_cell_type_shh",
+  `All subgroup tumor cell types` = "tumor_cell_types_all_subgroups"
   )
 
 #so <- RunALRA(so,  setDefaultAssay = FALSE)
@@ -194,7 +209,6 @@ cols_to_keep <- c(
   aligned_cluster_diversity = "aligned_cluster_diversity")
 
 #so <- RunALRA(so, setDefaultAssay = FALSE)
-gc()
 make_cellbrowser(so, 
                  column_list = cols_to_keep,
                  secondary_cols = 
@@ -225,6 +239,9 @@ make_cellbrowser(so,
 ```{r}
 so <- qread(file.path("objects", "gp34", "gp3_only.qs"))
 
+so$tumor_cell_type_gp3 <- str_replace_all(so$tumor_cell_type_gp3, ",", "")
+so$tumor_cell_types_all_subgroups <-  str_replace_all(so$tumor_cell_types_all_subgroups, ",", " ")
+
 cols_to_keep <- c(
   `genes per cell` = "nFeature_RNA",
   `UMIs per cell` = "nCount_RNA",
@@ -243,7 +260,10 @@ cols_to_keep <- c(
   "CytoTRACE-GCS" = "GCS",
   "CytoTRACE-score" = "CytoTRACE",
   unaligned_cluster_diversity = "unaligned_cluster_diversity", 
-  aligned_cluster_diversity = "aligned_cluster_diversity")
+  aligned_cluster_diversity = "aligned_cluster_diversity",
+  `GP3 tumor cell types` = "tumor_cell_type_gp3",
+  `All subgroup tumor cell types` = "tumor_cell_types_all_subgroups"
+  )
 
 #so <- RunALRA(so,  setDefaultAssay = FALSE)
 #gc()
@@ -254,7 +274,7 @@ scbp::make_cellbrowser(so,
                    c("subtype",
                      "cell_type",
                      "subgroup",
-                     "cell cycle phase"), 
+                     "cell cycle phase", 
                  project = "medulloblastoma_neoplastic_gp3_only",
                  outdir = cb_outdir,
                  marker_file = "markers/gp34/harmony_markers_gp3_only.tsv",
@@ -279,6 +299,9 @@ scbp::make_cellbrowser(so,
 ```{r}
 so <- qread(file.path("objects", "gp34", "gp4_only.qs"))
 
+so$tumor_cell_type_gp4 <- str_replace_all(so$tumor_cell_type_gp4, ",", "")
+so$tumor_cell_types_all_subgroups <-  str_replace_all(so$tumor_cell_types_all_subgroups, ",", " ")
+
 cols_to_keep <- c(
   `genes per cell` = "nFeature_RNA",
   `UMIs per cell` = "nCount_RNA",
@@ -297,7 +320,10 @@ cols_to_keep <- c(
   "CytoTRACE-GCS" = "GCS",
   "CytoTRACE-score" = "CytoTRACE",
   unaligned_cluster_diversity = "unaligned_cluster_diversity", 
-  aligned_cluster_diversity = "aligned_cluster_diversity")
+  aligned_cluster_diversity = "aligned_cluster_diversity",
+  `GP4 tumor cell types` = "tumor_cell_type_gp4",
+  `All subgroup tumor cell types` = "tumor_cell_types_all_subgroups"
+  )
 
 #so <- RunALRA(so,  setDefaultAssay = FALSE)
 
