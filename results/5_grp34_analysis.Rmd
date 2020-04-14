@@ -663,6 +663,96 @@ so <- AddMetaData(so, cbind(a, b))
 qsave(so, file.path(obj_dir, "gp3_only.qs"), nthreads = 4)
 ```
 
+```{r, eval = FALSE}
+so <- qread(file.path(obj_dir, "gp3_only.qs"), nthreads = 4)
+```
+
+## GO terms
+
+```{r}
+library(gprofiler2)
+library(ggrepel)
+mkrs <- read_tsv(file.path(mkrs_dir, 
+                    "harmony_markers_gp3_only.tsv")) %>% 
+  filter( padj < 0.05,
+          pct_in > 0.10) %>% 
+  group_by(group) %>% 
+  slice(1:500)
+
+mkrs_split <- split(mkrs, mkrs$group) %>% 
+  map(~pull(.x, feature))
+
+go_res <- gost(mkrs_split, 
+               ordered_query = TRUE,
+               sources = c("GO", 
+                           "KEGG", 
+                           "REAC", 
+                           "TF"))
+
+go_res[["result"]] %>% 
+  mutate(parents = unlist(map(parents, 
+                              ~str_c(.x, collapse = ",")))) %>% 
+  write_tsv(file.path(tbls_dir, "goterms_gp3_clusters.tsv"))
+
+go_res[["result"]] %>% 
+  mutate(parents = unlist(map(parents, 
+                              ~str_c(.x, collapse = ","))),
+         source = str_replace_all(source, 
+                                  "[[:punct:]]", " ")) %>% 
+  select(-significant) %>% 
+  split(., .$query) %>% 
+  openxlsx::write.xlsx(., file.path(tbls_dir,
+                                    "goterms_gp3_cluster.xlsx"))
+```
+
+## Cell type naming
+
+```{r}
+
+new_ids <- c(
+    "0" = "Differentiated (GOLGA8A, MALAT1) #0",
+    "2" = "Differentiated Photoreceptor (NRL) #2",
+    "3" = "Cell Cycle #3" ,
+    "1" = "Undifferentiated (RPGs and BTF3) #1",
+    "4" = "Undifferentiated (MYC, FOXQ1/F2) #4"
+  )
+
+so$tumor_cell_type_gp3 <- new_ids[as.character(so$coarse_clusters_gp3_harmony)]
+plot_harmony(so, "tumor_cell_type_gp3")
+```
+
+Back add the cell classifications to all neoplastic object
+
+```{r}
+so_mdata <- get_metadata(so) %>% 
+  select(cell, tumor_cell_type_gp3)
+
+so_neo <- qread(file.path("objects", "preprocess", "all_neoplastic.qs"))
+
+new_mdata <- get_metadata(so_neo) %>% 
+  select(cell, tumor_cell_types_all_subgroups, tumor_cell_type_subgroup_specific) %>% 
+  left_join(so_mdata, by = "cell") %>% 
+  mutate(tumor_cell_type_subgroup_specific = ifelse(!is.na(tumor_cell_type_gp3),
+                                                    str_c("GP3_", tumor_cell_type_gp3),
+                                                    tumor_cell_type_subgroup_specific))
+
+so_neo$tumor_cell_type_subgroup_specific <- new_mdata$tumor_cell_type_subgroup_specific
+
+new_mdata <- so_mdata %>% 
+  left_join(get_metadata(so_neo), by = "cell") %>% 
+  select(cell, tumor_cell_types_all_subgroups)
+
+so$tumor_cell_types_all_subgroups <- new_mdata$tumor_cell_types_all_subgroups
+```
+
+
+## save
+
+```{r}
+qsave(so, file.path(obj_dir, "gp3_only.qs"), nthreads = 4)
+qsave(so_neo, file.path("objects", "preprocess", "all_neoplastic.qs"))
+```
+
 
 ## GP4 only
 
@@ -846,6 +936,96 @@ so <- AddMetaData(so, cbind(a, b))
 ```{r}
 qsave(so, file.path(obj_dir, "gp4_only.qs"), nthreads = 4)
 ```
+
+## GO terms
+
+```{r}
+library(gprofiler2)
+library(ggrepel)
+mkrs <- read_tsv(file.path(mkrs_dir, 
+                    "harmony_markers_gp4_only.tsv")) %>% 
+  filter( padj < 0.05,
+          pct_in > 0.10) %>% 
+  group_by(group) %>% 
+  slice(1:500)
+
+mkrs_split <- split(mkrs, mkrs$group) %>% 
+  map(~pull(.x, feature))
+
+go_res <- gost(mkrs_split, 
+               ordered_query = TRUE,
+               sources = c("GO", 
+                           "KEGG", 
+                           "REAC", 
+                           "TF"))
+
+go_res[["result"]] %>% 
+  mutate(parents = unlist(map(parents, 
+                              ~str_c(.x, collapse = ",")))) %>% 
+  write_tsv(file.path(tbls_dir, "goterms_gp4_clusters.tsv"))
+
+go_res[["result"]] %>% 
+  mutate(parents = unlist(map(parents, 
+                              ~str_c(.x, collapse = ","))),
+         source = str_replace_all(source, 
+                                  "[[:punct:]]", " ")) %>% 
+  select(-significant) %>% 
+  split(., .$query) %>% 
+  openxlsx::write.xlsx(., file.path(tbls_dir,
+                                    "goterms_gp4_cluster.xlsx"))
+```
+
+## Cell type naming
+
+```{r}
+
+new_ids <- c(
+    "0" = "Differentiated (GRIA2, GOLGA8A, MALAT1) #0",
+    "5" = "Differentiated Photoreceptor (NRL) #5",
+    "4" = "Cell Cycle (EZH2, Differentiated-like) #4",
+    "3" = "Cell Cycle (STMN2, Undifferentiated-like) #3",
+    "1" = "Undifferentiated (RPGs, STMN1/2, EOMES) #1",
+    "2" = "Undifferentiated (RPGs, STMN1/2) #2",
+    "6" = "Exclude: Unknown #6",
+    "7" = "Exclude: Single tumor #7",
+    "8" = "Exclude: Single tumor #8"
+  )
+so$tumor_cell_type_gp4 <- new_ids[as.character(so$coarse_clusters_gp4_harmony)]
+plot_harmony(so, "tumor_cell_type_gp4")
+```
+
+Back add the cell classifications to all neoplastic object
+
+```{r}
+so_mdata <- get_metadata(so) %>% 
+  select(cell, tumor_cell_type_gp4)
+
+so_neo <- qread(file.path("objects", "preprocess", "all_neoplastic.qs"))
+
+new_mdata <- get_metadata(so_neo) %>% 
+  select(cell, tumor_cell_types_all_subgroups, tumor_cell_type_subgroup_specific) %>% 
+  left_join(so_mdata, by = "cell") %>% 
+  mutate(tumor_cell_type_subgroup_specific = ifelse(!is.na(tumor_cell_type_gp4),
+                                                    str_c("GP4_", tumor_cell_type_gp4),
+                                                    tumor_cell_type_subgroup_specific))
+
+so_neo$tumor_cell_type_subgroup_specific <- new_mdata$tumor_cell_type_subgroup_specific
+
+new_mdata <- so_mdata %>% 
+  left_join(get_metadata(so_neo), by = "cell") %>% 
+  select(cell, tumor_cell_types_all_subgroups)
+
+so$tumor_cell_types_all_subgroups <- new_mdata$tumor_cell_types_all_subgroups
+```
+
+
+## save
+
+```{r}
+qsave(so, file.path(obj_dir, "gp4_only.qs"), nthreads = 4)
+qsave(so_neo, file.path("objects", "preprocess", "all_neoplastic.qs"))
+```
+
 
 ```{r, eval = FALSE, echo = FALSE}
 # for quick reloading as necessary

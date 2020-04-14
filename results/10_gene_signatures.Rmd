@@ -1,0 +1,421 @@
+---
+title: "gene_signatures"
+author: "Kent Riemondy RBI"
+date: "`r Sys.Date()`"
+knit: (function(inputFile, encoding) {
+  rmarkdown::render(inputFile, encoding = encoding, output_dir = "html") })
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_collapsed: false
+    theme: cosmo
+    highlight: tango
+    fig_caption: true
+    code_folding: hide
+    df_print: paged
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
+source(here::here("/R/utils.R"))
+library(ComplexHeatmap)
+```
+
+
+```{r}
+
+so_fns <- file.path(obj_dir, c(
+  file.path("shh", "shh.qs"),
+  file.path("gp34", "gp3_only.qs"),
+  file.path("gp34", "gp4_only.qs")))
+                    
+clusters <- c(
+  "tumor_cell_type_shh",
+  "tumor_cell_type_gp3",
+  "tumor_cell_type_gp4"
+)
+
+sos <- map(so_fns, 
+            ~qread(.x, nthreads = 4, use_alt_rep = FALSE))
+
+names(sos) <- c("SHH", "GP3", "GP4")
+
+# new_ids <- list(
+#   shh = c(
+#     "3" = "Cell cycle (G2M) #3",
+#     "5" = "Cell cycle (S) #5",
+#     "0" = "Undifferentiated (RPGs and SFRP1) #0",
+#     "2" = "Undifferentiated (RPGs and BTF3) #2",
+#     "1" = "Differentiated (GRIA2, GOLGA8A, MALAT1) #1",
+#     "4" = "Differentiated (STMN2/4, MLLT1, NHLH1/2) #4",
+#     "6" = "Exclude: Doublet/contamination #6"
+#   ),
+#   gp3 = c(
+#     "0" = "Differentiated (GOLGA8A, MALAT1) #0",
+#     "2" = "Differentiated Photoreceptor (NRL) #2",
+#     "3" = "Cell Cycle #3" ,
+#     "1" = "Undifferentiated (RPGs and BTF3) #1",
+#     "4" = "Undifferentiated (MYC, FOXQ1/F2) #4"
+#   ),
+#   gp4 = c(
+#     "0" = "Differentiated (GRIA2, GOLGA8A, MALAT1) #0",
+#     "5" = "Differentiated Photoreceptor (NRL) #5",
+#     "4" = "Cell Cycle (EZH2, Differentiated-like) #4",
+#     "3" = "Cell Cycle (STMN2, Undifferentiated-like) #3",
+#     "1" = "Undifferentiated (RPGs, STMN1/2, EOMES) #1",
+#     "2" = "Undifferentiated (RPGs, STMN1/2) #2",
+#     "6" = "Exclude: Unknown #6",
+#     "7" = "Exclude: Single tumor #7",
+#     "8" = "Exclude: Single tumor #8"
+#   )
+# )
+  
+```
+
+```{r}
+sos <- pmap(
+  list(sos,
+    names(sos),
+    clusters),
+            function(so, id, cluster){
+              so$tumor_cell_type <- str_c(id, "_", so[[cluster]][,1])
+              so
+            })
+
+avg_expr <- pmap(list(
+  sos,
+  names(sos),
+  clusters),
+           function(x, id, cluster){
+            Idents(x) <- "tumor_cell_type"
+             mat <- AverageExpression(x)$RNA
+             x <- FindVariableFeatures(x, nfeatures = 3000)
+             var_genes <- VariableFeatures(x)
+             list(expr = mat,
+                  var_genes = var_genes[1:3000])
+           })
+
+
+var_genes <- map(avg_expr, ~.x$var_genes) %>% 
+  unlist() %>% 
+  unique()
+
+avg_expr_mat <- map(avg_expr, ~.x$expr) %>% 
+  unname() %>% 
+  do.call(cbind, .)
+avg_expr_mat <- avg_expr_mat[var_genes, ]
+
+
+cols_to_keep <- colnames(avg_expr_mat)[!colnames(avg_expr_mat) %in% c("GP4_Exclude: Unknown #6",
+                                                                      "SHH_Exclude: Doublet/contamination #6")]
+avg_expr_mat <- avg_expr_mat[, cols_to_keep]
+
+
+hmap <- Heatmap(cor(avg_expr_mat, method = "pearson"),
+        col = viridis::viridis(256),
+        name = "Correlation",
+        row_names_gp = gpar(fontsize = 7),
+        column_names_gp = gpar(fontsize = 7))
+
+pdf(file.path(fig_dir, "tumor_cell_type_correlation_matrix.pdf"),
+    width = 9,
+    height = 7)
+draw(hmap)
+dev.off()
+
+hmap
+```
+
+
+```{r}
+so <- merge(sos[[1]], sos[2:3])
+so <- subset(so, cells = names(so$tumor_cell_type[!so$tumor_cell_type %in% c("GP4_Exclude: Unknown #6",
+                                                                      "SHH_Exclude: Doublet/contamination #6")]))
+```
+
+```{r}
+library(presto)
+
+all_tumor_mkrs <- wilcoxauc(so, "tumor_cell_type")
+
+undiff_pops <- str_subset(unique(so$tumor_cell_type), "_Undifferentiated")
+undiff_mkrs <- wilcoxauc(so, "tumor_cell_type", groups_use = undiff_pops)
+
+top_undiff_mkrs <- undiff_mkrs %>% 
+  filter(padj < 0.05,
+                       logFC > 0, 
+                       pct_in > 0.10) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC), .by_group = T) %>% 
+  ungroup()
+
+
+diff_pops <- str_subset(unique(so$tumor_cell_type), "_Differentiated")
+diff_mkrs <- wilcoxauc(so, "tumor_cell_type", groups_use = diff_pops)
+
+top_diff_mkrs <- diff_mkrs %>% 
+  filter(padj < 0.05,
+                       logFC > 0, 
+                       pct_in > 0.10) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC), .by_group = T) %>% 
+  ungroup()
+
+top_diff_mkrs <- split(top_diff_mkrs, top_diff_mkrs$group) 
+names(top_diff_mkrs) <- names(top_diff_mkrs) %>% 
+   str_remove("_Differentiated") %>% 
+  str_replace_all("[[:punct:]]", "")
+
+openxlsx::write.xlsx(top_diff_mkrs, file.path(tbls_dir,
+                                    "tumor_differentiated_population_markers.xlsx")) 
+
+top_undiff_mkrs <- split(top_undiff_mkrs, top_undiff_mkrs$group) 
+names(top_undiff_mkrs) <- names(top_undiff_mkrs) %>% 
+   str_remove("_Undifferentiated") %>% 
+  str_replace_all("[[:punct:]]", "")
+
+openxlsx::write.xlsx(top_undiff_mkrs, file.path(tbls_dir,
+                                    "tumor_undifferentiated_population_markers.xlsx")) 
+```
+
+
+```{r}
+library(gprofiler2)
+
+# Use top 500 markers   
+mkrs_split <- map(top_undiff_mkrs, ~pull(.x[1:500, ], feature))
+
+go_res <- gost(mkrs_split, 
+               ordered_query = TRUE,
+               sources = c("GO", 
+                          "KEGG", 
+                          "REAC", 
+                          "TF"))
+
+go_res[["result"]] %>% 
+  mutate(parents = unlist(map(parents, ~str_c(.x, collapse = ","))),
+         source = str_replace_all(source, "[[:punct:]]", " ")) %>% 
+  select(-significant) %>% 
+  split(., .$query) %>% 
+  openxlsx::write.xlsx(., file.path(tbls_dir, "goterms_undifferentiated_cell_types.xlsx"))
+
+
+
+mkrs_split <- map(top_diff_mkrs, ~pull(.x[1:500, ], feature))
+
+go_res <- gost(mkrs_split, 
+               ordered_query = TRUE,
+               sources = c("GO", 
+                          "KEGG", 
+                          "REAC", 
+                          "TF"))
+
+go_res[["result"]] %>% 
+  mutate(parents = unlist(map(parents, ~str_c(.x, collapse = ","))),
+         source = str_replace_all(source, "[[:punct:]]", " ")) %>% 
+  select(-significant) %>% 
+  split(., .$query) %>% 
+  openxlsx::write.xlsx(., file.path(tbls_dir, "goterms_differentiated_cell_types.xlsx"))
+```
+
+```{r}
+mkrs <- diff_mkrs %>% 
+  filter(padj < 0.05,
+         logFC > 0, 
+         pct_in > 0.10) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC), .by_group = T) %>% 
+  # mutate(group = factor(group, levels = ))
+  slice(1:10) %>% 
+  pull(feature)
+
+tmp <- subset(so, subset = tumor_cell_type %in% diff_pops)
+tmp@assays$TF <- NULL
+tmp <- ScaleData(tmp, features = mkrs)
+
+hmap <- plot_heatmap(tmp, 
+             features = unique(mkrs),
+             group = "tumor_cell_type",
+             average = TRUE, 
+             hmap_options = list(show_column_names = FALSE, 
+                                 cluster_columns = TRUE,
+                                 cluster_rows = FALSE)
+    )
+
+pdf(file.path(fig_dir, "top_markers_between_differentiated_populations.pdf"),
+    width = 7,
+    height = 9)
+draw(hmap)
+dev.off()
+
+hmap
+
+
+
+mkrs <- undiff_mkrs %>% 
+  filter(padj < 0.05,
+                       logFC > 0, 
+                       pct_in > 0.10) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC), .by_group = T) %>% 
+ # mutate(group = factor(group, levels = ))
+  slice(1:10) %>% 
+  pull(feature)
+
+tmp <- subset(so, subset = tumor_cell_type %in% undiff_pops)
+tmp@assays$TF <- NULL
+tmp <- ScaleData(tmp, features = mkrs)
+
+hmap <- plot_heatmap(tmp, 
+             features = unique(mkrs),
+             group = "tumor_cell_type",
+             average = TRUE, 
+             hmap_options = list(show_column_names = FALSE, 
+                                 cluster_columns = TRUE,
+                                 cluster_rows = TRUE)
+    )
+
+pdf(file.path(fig_dir, "top_markers_between_progenitor_populations.pdf"),
+    width = 7,
+    height = 9)
+draw(hmap)
+dev.off()
+
+hmap
+
+```
+
+
+### Cell cycle differences
+
+GP4 
+
+```{r}
+plts <- plot_feature(sos$GP4, c("tumor_cell_type", 
+                        "Phase",
+                        "MKI67",
+                        "GRIA2",
+                        "RPL32"),
+             embedding = "pca")
+
+p <- plot_grid(plotlist = plts[2:5],
+  nrow = 2, 
+  ncol = 2)
+
+p
+
+save_plot(file.path(fig_dir, "gp4_cell_cycle_pca.pdf"),
+          p,
+          nrow = 2,
+          ncol = 2,
+          base_asp = 1.5)
+
+p <- plot_grid(plotlist = plts[1],
+  nrow = 1, 
+  ncol = 1)
+
+p
+
+save_plot(file.path(fig_dir, "gp4_cell_type_pca.pdf"),
+          p,
+          nrow = 1,
+          ncol = 1,
+          base_asp = 2.5)
+
+
+p <- plot_harmony(sos$GP4, "tumor_cell_type", legend_title = "")
+
+save_plot(file.path(fig_dir, "gp4_cell_type_umap.pdf"),
+          p,
+          base_asp = 2.5)
+```
+
+
+```{r}
+
+plts <- plot_feature(sos$GP3, c("tumor_cell_type", 
+                        "Phase",
+                        "MKI67",
+                        "PCDH9",
+                        "RPL32"),
+             embedding = "pca")
+
+p <- plot_grid(plotlist = plts[2:5],
+  nrow = 2, 
+  ncol = 2)
+
+p
+
+save_plot(file.path(fig_dir, "gp3_cell_cycle_pca.pdf"),
+          p,
+          nrow = 2,
+          ncol = 2,
+          base_asp = 1.5)
+
+p <- plot_grid(plotlist = plts[1],
+  nrow = 1, 
+  ncol = 1)
+
+p
+
+save_plot(file.path(fig_dir, "gp3_cell_type_pca.pdf"),
+          p,
+          nrow = 1,
+          ncol = 1,
+          base_asp = 2.5)
+
+p <- plot_harmony(sos$GP3, "tumor_cell_type", legend_title = "")
+
+save_plot(file.path(fig_dir, "gp3_cell_type_umap.pdf"),
+          p,
+          base_asp = 2.5)
+```
+
+
+
+```{r}
+
+plts <- plot_feature(sos$SHH, c("tumor_cell_type", 
+                        "Phase",
+                        "MKI67",
+                        "NHLH1",
+                        "RPL32"),
+             embedding = "pca")
+
+p <- plot_grid(plotlist = plts[2:5],
+  nrow = 2, 
+  ncol = 2)
+
+p
+
+save_plot(file.path(fig_dir, "shh_cell_cycle_pca.pdf"),
+          p,
+          nrow = 2,
+          ncol = 2,
+          base_asp = 1.5)
+
+p <- plot_grid(plotlist = plts[1],
+  nrow = 1, 
+  ncol = 1)
+
+p
+
+save_plot(file.path(fig_dir, "shh_cell_type_pca.pdf"),
+          p,
+          nrow = 1,
+          ncol = 1,
+          base_asp = 2.5)
+
+
+p <- plot_harmony(sos$SHH, "tumor_cell_type", legend_title = "")
+
+save_plot(file.path(fig_dir, "shh_cell_type_umap.pdf"),
+          p,
+          base_asp = 2.5)
+```
+

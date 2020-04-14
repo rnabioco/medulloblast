@@ -566,6 +566,30 @@ qsave(so, file.path(obj_dir,"shh_sobj.qs"))
 #so <- qread(file.path(obj_dir,"shh_sobj.qs"))
 ```
 
+
+### Pseudotime
+
+```{r}
+
+so <- subset(so, subset = cell_types == "malignant")
+so <- FindVariableFeatures(so) %>% 
+  ScaleData(.) %>% 
+  RunPCA(seed.use = seed_value) %>% 
+  RunUMAP(dims = 1:15, n.neighbors = 20L, seed.use = seed_value) %>% 
+  FindNeighbors() %>% 
+  FindClusters(resolution = c(0.1, 0.2, 0.3, 0.4, 0.8),
+               random.seed = seed_value)
+
+
+
+plot_pca(so, 
+         c("Pou2f2",
+           "Rpl39",
+           "Mki67",
+           "Stmn2"))
+```
+
+
 # Integrate with human
 
 
@@ -871,7 +895,7 @@ plt
 
 ```{r}
 qsave(so, file.path(obj_dir,"human_shh_sobj.qs"))
-#so <- qread(file.path(obj_dir,"human_shh_sobj.qs"))
+so <- qread(file.path(obj_dir,"human_shh_sobj.qs"))
 ```
 
 

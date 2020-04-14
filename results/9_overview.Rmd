@@ -6,17 +6,14 @@ output: html_document
 ---
 
 ```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
-source("../R/utils.R")
+source(here::here("/R/utils.R"))
+rmd_dir <- "preprocess"
 
-proj_dir <- here()
-data_dir <- file.path(proj_dir, "data", "cellranger", "results")
-doc_dir <- file.path(proj_dir, "docs")
-
-fig_dir <- "figs"
-mkrs_dir <- "markers"
-tbls_dir <- "tables"
-walk(c(fig_dir, mkrs_dir, tbls_dir), dir.create, showWarnings = F)
-
+fig_dir <- file.path(fig_dir, "overview")
+mkrs_dir <- file.path(mkrs_dir, rmd_dir)
+tbls_dir <- file.path(tbls_dir, rmd_dir)
+obj_dir <- file.path(obj_dir, rmd_dir)
+dir.create(fig_dir, showWarnings = FALSE)
 library(ComplexHeatmap)
 library(dendextend)
 ```
@@ -25,7 +22,7 @@ library(dendextend)
 
   
 ```{r}
-so <- readRDS(file.path("objects", "so.rds"))
+so <- qread(file.path(obj_dir, "so.qs"), nthreads = 4)
 ```
 
 
@@ -92,11 +89,8 @@ names(coarse_cell_type_pretty_id) <- c("malignant",
                                "oligodendrocytes_astrocytes_other",
                                "macrophage_monocytes")
 
-p <- plot_umap(so, "coarse_cell_type") +
-  scale_color_manual(name = "",
-                     values = palette_OkabeIto, 
-                      breaks = names(coarse_cell_type_pretty_id), 
-                      labels = coarse_cell_type_pretty_id)
+so$coarse_cell_type_id <- coarse_cell_type_pretty_id[so$coarse_cell_type]
+p <- plot_umap(so, "coarse_cell_type_id", .cols = palette_OkabeIto, legend_title = "") 
 
 p 
 
@@ -108,49 +102,19 @@ save_plot(file.path(fig_dir, "umap_by_coarse_cell_type.pdf"),
 ## Plot cell distibutions per subgroup and tumor
 
 ```{r}
-sc_mdata <- so@meta.data %>% 
-  rownames_to_column("cell")
-
-per_patient <- sc_mdata %>% 
-  mutate(simple_id = coarse_cell_type_pretty_id[coarse_cell_type]) %>% 
-  group_by(UPN) %>%
-  mutate(n_cells = n()) %>% 
-  group_by(UPN, simple_id) %>% 
-  summarize(n = n(),
-            prop_cell_type = n / unique(n_cells),
-            subgroup = unique(subgroup))
-
-cell_summary <- sc_mdata %>% 
-  mutate(simple_id = coarse_cell_type_pretty_id[coarse_cell_type]) %>% 
-  group_by(UPN) %>%
-  mutate(n_cells = n()) %>% 
-  ungroup() %>% 
-  select(UPN, subgroup, n_cells) %>% 
-  mutate(n_cells = str_c("n = ", n_cells),
-         n_cells = str_pad(n_cells, max(nchar(n_cells)), "right")) %>% 
-  unique()
-
-p <- ggplot(per_patient, 
-       aes(UPN, prop_cell_type)) +
-  geom_col(aes(fill = simple_id)) +
-  labs(x = "Tumor ID",
+p <- plot_cell_proportions(so, "UPN", "coarse_cell_type_id", facet_by = "subgroup") +
+   labs(x = "Tumor ID",
        y = "Proportion of each cell type") +
   scale_fill_manual(values = rev(palette_OkabeIto[1:4]), 
-                    name = "") + 
-  facet_grid(~subgroup, scales = "free_x", space = "free_x") +
-  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
-        legend.position = "top",
-        strip.background = element_rect(fill = "white")) +
-  geom_text(data = cell_summary, 
-            aes(x = UPN, y = 0.15,
-                label = n_cells),
-            angle = 90)
-p
+                    name = "") +
+   theme( strip.text = element_text(angle = 90))
+
 
 save_plot(file.path(fig_dir, "cell_types_per_tumor.pdf"), 
           p,
           base_width = 7,
           base_aspect_ratio = 1.5)
+
 ```
 
 
@@ -167,7 +131,7 @@ run on server per subgroup. Consider replotting heatmaps with better visualizati
 ## Subtypes based on Cavalli paper
 
 ```{r}
-so <- readRDS(file.path("objects", "all_neoplastic.rds"))
+so <- qread(file.path(obj_dir, "all_neoplastic.qs"))
 
 n_cells <- ncol(so) %>% scales::comma() %>% str_c(., " cells")
 p <- plot_umap(so, "subgroup", .cols = palette_OkabeIto,
@@ -206,7 +170,7 @@ save_plot(file.path(fig_dir, "umap_neoplastic_by_UPN.pdf"),
 # SHH tumors
 
 ```{r}
-so <- readRDS(file.path("objects", "shh2.rds"))
+so <- qread(file.path("objects", "shh", "shh.qs"))
 ```
 
 ### Various genes in SHH

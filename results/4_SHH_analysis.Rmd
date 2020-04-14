@@ -434,10 +434,55 @@ b <- calc_diversity(so, "UPN", "coarse_clusters_shh_harmony")@meta.data %>%
 so <- AddMetaData(so, cbind(a, b))
 ```
 
+
+## Cell type naming
+
+```{r}
+
+new_ids <- c(
+    "3" = "Cell cycle (G2M) #3",
+    "5" = "Cell cycle (S) #5",
+    "0" = "Undifferentiated (RPGs and SFRP1) #0",
+    "2" = "Undifferentiated (RPGs and BTF3) #2",
+    "1" = "Differentiated (GRIA2, GOLGA8A, MALAT1) #1",
+    "4" = "Differentiated (STMN2/4, MLLT1, NHLH1/2) #4",
+    "6" = "Exclude: Doublet/contamination #6"
+  )
+
+so$tumor_cell_type_shh <- new_ids[as.character(so$coarse_clusters_shh_harmony)]
+plot_harmony(so, "tumor_cell_type_shh")
+```
+
+Back add the cell classifications to all neoplastic object
+
+```{r}
+so_mdata <- get_metadata(so) %>% 
+  select(cell, tumor_cell_type_shh)
+
+so_neo <- qread(file.path("objects", "preprocess", "all_neoplastic.qs"))
+
+new_mdata <- get_metadata(so_neo) %>% 
+  select(cell, tumor_cell_types_all_subgroups) %>% 
+  left_join(so_mdata, by = "cell") %>% 
+  mutate(tumor_cell_type_subgroup_specific = ifelse(!is.na(tumor_cell_type_shh),
+                                                    str_c("SHH_", tumor_cell_type_shh),
+                                                    NA))
+
+so_neo$tumor_cell_type_subgroup_specific <- new_mdata$tumor_cell_type_subgroup_specific
+
+new_mdata <- so_mdata %>% 
+  left_join(get_metadata(so_neo), by = "cell") %>% 
+  select(cell, tumor_cell_types_all_subgroups)
+
+so$tumor_cell_types_all_subgroups <- new_mdata$tumor_cell_types_all_subgroups
+```
+
+
 ## save
 
 ```{r}
 qsave(so, file.path(obj_dir, "shh.qs"), nthreads = 4)
+qsave(so_neo, file.path("objects", "preprocess", "all_neoplastic.qs"))
 ```
 
 ```{r, eval = FALSE}
