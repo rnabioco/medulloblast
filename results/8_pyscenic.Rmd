@@ -28,14 +28,7 @@ Ran on bodhi (see [python script](../data/pyscenic/pyscenic_analysis.py))
 
 ```{r}
 data_dir <- "../data/pyscenic/"
-# grp34_data <- read_csv(file.path(data_dir, 
-#                                  "output_gp34/auc_res.csv"))
-# 
-# shh_data <- read_csv(file.path(data_dir, 
-#                                "output_shh/auc_res.csv"))
-# 
-# immune_data <- read_csv(file.path(data_dir, 
-#                                "output_immune/auc_res.csv"))
+
 sample_dirs <- c(
   "gp34",
   "gp3_only",
@@ -78,10 +71,10 @@ so_tf_markers <- wilcoxauc(so,
   group_by(group) %>% 
   arrange(padj, desc(logFC))
 
-write_tsv(so_tf_markers, file.path(tbls_dir, "shh_tf_activities.tsv"))
+write_tsv(so_tf_markers, file.path(tbls_dir, "shh", "shh_tf_activities.tsv"))
 
 write_markers_xlsx(split(so_tf_markers, so_tf_markers$group),
-                   path = file.path(tbls_dir,"shh_tf_activities.xlsx"),
+                   path = file.path(tbls_dir,"shh","shh_tf_activities.xlsx"),
                    description_string = "Transcription factor regulons derived from PyScenic that are significantly enriched in each cluster")
 
 topx <- so_tf_markers %>% 
@@ -103,7 +96,7 @@ p <- p +
   scale_fill_gradientn(colours = viridis::viridis(256),
                        name = "Regulon AUC\nZ-scores")
 
-save_plot(file.path(fig_dir, "heatmap_tfs_shh.pdf"), 
+save_plot(file.path(fig_dir, "shh", "heatmap_tfs_shh.pdf"), 
           p,
           base_asp = 2,
           base_height = 8)
@@ -112,7 +105,7 @@ save_plot(file.path(fig_dir, "heatmap_tfs_shh.pdf"),
 
 resave 
 
-```{r}
+```{r, eval = FALSE}
 DefaultAssay(so) <- "RNA"
 qsave(so, file.path(obj_dir, "shh", "shh.qs"), nthreads = 4)
 ```
@@ -143,10 +136,10 @@ so_tf_markers <- wilcoxauc(so,
   group_by(group) %>% 
   arrange(padj, desc(logFC))
 
-write_tsv(so_tf_markers, file.path(tbls_dir, "gp34_tf_activities.tsv"))
+write_tsv(so_tf_markers, file.path(tbls_dir, "gp34", "gp34_tf_activities.tsv"))
 
 write_markers_xlsx(split(so_tf_markers, so_tf_markers$group),
-                   path = file.path(tbls_dir,"gp34_tf_activities.xlsx"),
+                   path = file.path(tbls_dir, "gp34", "gp34_tf_activities.xlsx"),
                    description_string = "Transcription factor regulons derived from PyScenic that are significantly enriched in each cluster")
 
 topx <- so_tf_markers %>% 
@@ -168,14 +161,14 @@ p <- p +
   scale_fill_gradientn(colours = viridis::viridis(256),
                        name = "Regulon AUC\nZ-scores")
 
-save_plot(file.path(fig_dir, "heatmap_tfs_gp34.pdf"), 
+save_plot(file.path(fig_dir, "gp34", "heatmap_tfs_gp34.pdf"), 
           p,
           base_asp = 2,
           base_height = 8)
 
 ```
 
-```{r}
+```{r, eval = FALSE}
 DefaultAssay(so) <- "RNA"
 
 qsave(so, file.path(obj_dir, "gp34", "gp34.qs"), nthreads = 4)
@@ -184,6 +177,11 @@ qsave(so, file.path(obj_dir, "gp34", "gp34.qs"), nthreads = 4)
 
 
 ## Group 3 only
+
+```{r}
+dir.create(file.path(fig_dir, "gp3"), showWarnings = FALSE)
+dir.create(file.path(tbls_dir, "gp3"), showWarnings = FALSE)
+```
 
 ```{r}
 so <- qread(file.path(obj_dir,"gp34", "gp3_only.qs"), nthreads = 4, use_alt_rep = FALSE)
@@ -208,10 +206,10 @@ so_tf_markers <- wilcoxauc(so,
   group_by(group) %>% 
   arrange(padj, desc(logFC))
 
-write_tsv(so_tf_markers, file.path(tbls_dir, "gp3_tf_activities.tsv"))
+write_tsv(so_tf_markers, file.path(tbls_dir, "gp3", "gp3_tf_activities.tsv"))
 
 write_markers_xlsx(split(so_tf_markers, so_tf_markers$group),
-                   path = file.path(tbls_dir,"gp3_tf_activities.xlsx"),
+                   path = file.path(tbls_dir, "gp3", "gp3_tf_activities.xlsx"),
                    description_string = "Transcription factor regulons derived from PyScenic that are significantly enriched in each cluster")
 
 topx <- so_tf_markers %>% 
@@ -233,14 +231,14 @@ p <- p +
   scale_fill_gradientn(colours = viridis::viridis(256),
                        name = "Regulon AUC\nZ-scores")
 
-save_plot(file.path(fig_dir, "heatmap_tfs_gp3.pdf"), 
+save_plot(file.path(fig_dir, "gp3", "heatmap_tfs_gp3.pdf"), 
           p,
           base_asp = 2,
           base_height = 8)
 p
 ```
 
-```{r}
+```{r, eval = FALSE}
 DefaultAssay(so) <- "RNA"
 qsave(so, file.path(obj_dir, "gp34", "gp3_only.qs"), nthreads = 4)
 ```
@@ -248,6 +246,11 @@ qsave(so, file.path(obj_dir, "gp34", "gp3_only.qs"), nthreads = 4)
 
 
 ## Group 4 only
+
+```{r}
+dir.create(file.path(fig_dir, "gp4"), showWarnings = FALSE)
+dir.create(file.path(tbls_dir, "gp4"), showWarnings = FALSE)
+```
 
 ```{r}
 so <- qread(file.path(obj_dir,"gp34", "gp4_only.qs"), nthreads = 4, use_alt_rep = FALSE)
@@ -272,10 +275,10 @@ so_tf_markers <- wilcoxauc(so,
   group_by(group) %>% 
   arrange(padj, desc(logFC))
 
-write_tsv(so_tf_markers, file.path(tbls_dir, "gp4_tf_activities.tsv"))
+write_tsv(so_tf_markers, file.path(tbls_dir, "gp4", "gp4_tf_activities.tsv"))
 
 write_markers_xlsx(split(so_tf_markers, so_tf_markers$group),
-                   path = file.path(tbls_dir,"gp4_tf_activities.xlsx"),
+                   path = file.path(tbls_dir, "gp4", "gp4_tf_activities.xlsx"),
                    description_string = "Transcription factor regulons derived from PyScenic that are significantly enriched in each cluster")
 
 topx <- so_tf_markers %>% 
@@ -297,14 +300,14 @@ p <- p +
   scale_fill_gradientn(colours = viridis::viridis(256),
                        name = "Regulon AUC\nZ-scores")
 
-save_plot(file.path(fig_dir, "heatmap_tfs_gp4.pdf"), 
+save_plot(file.path(fig_dir, "gp4", "heatmap_tfs_gp4.pdf"), 
           p,
           base_asp = 2,
           base_height = 8)
 
 ```
 
-```{r}
+```{r, eval = FALSE}
 DefaultAssay(so) <- "RNA"
 qsave(so, file.path(obj_dir, "gp34", "gp4_only.qs"), nthreads = 4)
 ```
@@ -335,10 +338,10 @@ so_tf_markers <- wilcoxauc(so,
   group_by(group) %>% 
   arrange(padj, desc(logFC))
 
-write_tsv(so_tf_markers, file.path(tbls_dir, "immune_tf_activities.tsv"))
+write_tsv(so_tf_markers, file.path(tbls_dir, "immune", "immune_tf_activities.tsv"))
 
 write_markers_xlsx(split(so_tf_markers, so_tf_markers$group),
-                   path = file.path(tbls_dir, "immune_tf_activities.xlsx"),
+                   path = file.path(tbls_dir, "immune", "immune_tf_activities.xlsx"),
                    description_string = "Transcription factor regulons derived from PyScenic that are significantly enriched in each cluster")
 
 topx <- so_tf_markers %>% 
@@ -360,14 +363,14 @@ p <- p +
   scale_fill_gradientn(colours = viridis::viridis(256),
                        name = "Regulon AUC\nZ-scores")
 
-save_plot(file.path(fig_dir, "heatmap_tfs_immune.pdf"), 
+save_plot(file.path(fig_dir, "immune", "heatmap_tfs_immune.pdf"), 
           p,
           base_asp = 2,
           base_height = 8)
 
 ```
 
-```{r}
+```{r, eval = FALSE}
 DefaultAssay(so) <- "RNA"
 qsave(so, file.path(obj_dir, "immune", "immune_so.qs"), nthreads = 4)
 ```

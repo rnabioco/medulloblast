@@ -476,6 +476,9 @@ so_gp3 <- subset(so, subset = subgroup == "GP3")
 so_gp4 <- subset(so, subset = subgroup == "GP4")
 
 rm(so); gc()
+
+gp3_tbls_dir <- file.path(proj_dir, "results", "tables", "gp3")
+dir.create(gp3_tbls_dir, showWarnings = FALSE)
 ```
 
 
@@ -569,7 +572,7 @@ mkrs %>%
   ungroup() %>% 
   split(., .$group) %>% 
   write_markers_xlsx(.,
-                     file.path(tbls_dir, "harmony_markers_gp3_only.xlsx"))
+                     file.path(gp3_tbls_dir, "harmony_markers_gp3_only.xlsx"))
 ```
 
 
@@ -579,7 +582,7 @@ GetAssayData(so, "counts") %>%
   as.matrix(.) %>% 
   as.data.frame() %>% 
   rownames_to_column("gene") %>% 
-  data.table::fwrite(., file.path(tbls_dir, "gp3_count_matrix.tsv.gz"),
+  data.table::fwrite(., file.path(gp3_tbls_dir, "gp3_count_matrix.tsv.gz"),
        sep = "\t",
        compress = "gzip")
   
@@ -591,7 +594,7 @@ expr_mat %>%
   as.matrix(.) %>% 
   as.data.frame() %>% 
   rownames_to_column("gene") %>% 
-  data.table::fwrite(., file.path(tbls_dir, "gp3_expr_matrix.tsv.gz"),
+  data.table::fwrite(., file.path(gp3_tbls_dir, "gp3_expr_matrix.tsv.gz"),
        sep = "\t",
        compress = "gzip")
 
@@ -603,7 +606,7 @@ cell_count_mat[is.na(cell_count_mat)] <- 0L
 
 cell_count_mat %>% 
   tibble::rownames_to_column("UPN") %>% 
-write_csv(file.path(tbls_dir, 
+write_csv(file.path(gp3_tbls_dir, 
                          "coarse_clusters_gp3_harmony_cell_counts.csv"))
 ```
 
@@ -692,7 +695,7 @@ go_res <- gost(mkrs_split,
 go_res[["result"]] %>% 
   mutate(parents = unlist(map(parents, 
                               ~str_c(.x, collapse = ",")))) %>% 
-  write_tsv(file.path(tbls_dir, "goterms_gp3_clusters.tsv"))
+  write_tsv(file.path(gp3_tbls_dir, "goterms_gp3_clusters.tsv"))
 
 go_res[["result"]] %>% 
   mutate(parents = unlist(map(parents, 
@@ -701,7 +704,7 @@ go_res[["result"]] %>%
                                   "[[:punct:]]", " ")) %>% 
   select(-significant) %>% 
   split(., .$query) %>% 
-  openxlsx::write.xlsx(., file.path(tbls_dir,
+  openxlsx::write.xlsx(., file.path(gp3_tbls_dir,
                                     "goterms_gp3_cluster.xlsx"))
 ```
 
@@ -755,6 +758,11 @@ qsave(so_neo, file.path("objects", "preprocess", "all_neoplastic.qs"))
 
 
 ## GP4 only
+
+```{r}
+gp4_tbls_dir <- file.path(proj_dir, "results", "tables", "gp4")
+dir.create(gp3_tbls_dir, showWarnings = FALSE)
+```
 
 ```{r}
 so <- FindVariableFeatures(
@@ -847,7 +855,7 @@ mkrs %>%
   ungroup() %>% 
   split(., .$group) %>% 
   write_markers_xlsx(.,
-                     file.path(tbls_dir, "harmony_markers_gp4_only.xlsx"))
+                     file.path(gp4_tbls_dir, "harmony_markers_gp4_only.xlsx"))
 ```
 
 ```{r}
@@ -856,7 +864,7 @@ GetAssayData(so, "counts") %>%
   as.matrix(.) %>% 
   as.data.frame() %>% 
   rownames_to_column("gene") %>% 
-  data.table::fwrite(., file.path(tbls_dir, "gp4_count_matrix.tsv.gz"),
+  data.table::fwrite(., file.path(gp4_tbls_dir, "gp4_count_matrix.tsv.gz"),
        sep = "\t",
        compress = "gzip")
   
@@ -868,7 +876,7 @@ expr_mat %>%
   as.matrix(.) %>% 
   as.data.frame() %>% 
   rownames_to_column("gene") %>% 
-  data.table::fwrite(., file.path(tbls_dir, "gp4_expr_matrix.tsv.gz"),
+  data.table::fwrite(., file.path(gp4_tbls_dir, "gp4_expr_matrix.tsv.gz"),
        sep = "\t",
        compress = "gzip")
 
@@ -878,7 +886,7 @@ cell_count_mat[is.na(cell_count_mat)] <- 0L
 
 cell_count_mat %>% 
   tibble::rownames_to_column("UPN") %>% 
-write_csv( file.path(tbls_dir, 
+write_csv( file.path(gp4_tbls_dir, 
                          "coarse_clusters_gp4_harmony_cell_counts.csv"))
 ```
 
@@ -962,7 +970,7 @@ go_res <- gost(mkrs_split,
 go_res[["result"]] %>% 
   mutate(parents = unlist(map(parents, 
                               ~str_c(.x, collapse = ",")))) %>% 
-  write_tsv(file.path(tbls_dir, "goterms_gp4_clusters.tsv"))
+  write_tsv(file.path(gp4_tbls_dir, "goterms_gp4_clusters.tsv"))
 
 go_res[["result"]] %>% 
   mutate(parents = unlist(map(parents, 
@@ -971,7 +979,7 @@ go_res[["result"]] %>%
                                   "[[:punct:]]", " ")) %>% 
   select(-significant) %>% 
   split(., .$query) %>% 
-  openxlsx::write.xlsx(., file.path(tbls_dir,
+  openxlsx::write.xlsx(., file.path(gp4_tbls_dir,
                                     "goterms_gp4_cluster.xlsx"))
 ```
 

@@ -21,9 +21,24 @@ output:
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
+```{r libs}
 source(here::here("/R/utils.R"))
 library(ComplexHeatmap)
+library(presto)
+library(openxlsx)
+library(gprofiler2)
+
+rmd_dir <- "cell_type_signature_comparisons"
+
+fig_dir <- file.path(fig_dir, rmd_dir)
+mkrs_dir <- file.path(mkrs_dir, rmd_dir)
+tbls_dir <- file.path(tbls_dir, rmd_dir)
+go_dir <- file.path(tbls_dir, "go")
+xcel_markers_dir <- file.path(tbls_dir, "markers")
+
+walk(c(fig_dir, mkrs_dir, tbls_dir, go_dir, xcel_markers_dir),
+     dir.create, 
+     showWarnings = FALSE)
 ```
 
 
@@ -139,8 +154,6 @@ so <- subset(so, cells = names(so$tumor_cell_type[!so$tumor_cell_type %in% c("GP
 ```
 
 ```{r}
-library(presto)
-
 all_tumor_mkrs <- wilcoxauc(so, "tumor_cell_type")
 
 undiff_pops <- str_subset(unique(so$tumor_cell_type), "_Undifferentiated")
@@ -171,7 +184,7 @@ names(top_diff_mkrs) <- names(top_diff_mkrs) %>%
    str_remove("_Differentiated") %>% 
   str_replace_all("[[:punct:]]", "")
 
-openxlsx::write.xlsx(top_diff_mkrs, file.path(tbls_dir,
+write.xlsx(top_diff_mkrs, file.path(xcel_markers_dir,
                                     "tumor_differentiated_population_markers.xlsx")) 
 
 top_undiff_mkrs <- split(top_undiff_mkrs, top_undiff_mkrs$group) 
@@ -179,14 +192,12 @@ names(top_undiff_mkrs) <- names(top_undiff_mkrs) %>%
    str_remove("_Undifferentiated") %>% 
   str_replace_all("[[:punct:]]", "")
 
-openxlsx::write.xlsx(top_undiff_mkrs, file.path(tbls_dir,
+write.xlsx(top_undiff_mkrs, file.path(xcel_markers_dir,
                                     "tumor_undifferentiated_population_markers.xlsx")) 
 ```
 
 
 ```{r}
-library(gprofiler2)
-
 # Use top 500 markers   
 mkrs_split <- map(top_undiff_mkrs, ~pull(.x[1:500, ], feature))
 
@@ -202,7 +213,7 @@ go_res[["result"]] %>%
          source = str_replace_all(source, "[[:punct:]]", " ")) %>% 
   select(-significant) %>% 
   split(., .$query) %>% 
-  openxlsx::write.xlsx(., file.path(tbls_dir, "goterms_undifferentiated_cell_types.xlsx"))
+  openxlsx::write.xlsx(., file.path(go_dir, "goterms_undifferentiated_cell_types.xlsx"))
 
 
 
@@ -220,7 +231,7 @@ go_res[["result"]] %>%
          source = str_replace_all(source, "[[:punct:]]", " ")) %>% 
   select(-significant) %>% 
   split(., .$query) %>% 
-  openxlsx::write.xlsx(., file.path(tbls_dir, "goterms_differentiated_cell_types.xlsx"))
+  openxlsx::write.xlsx(., file.path(go_dir, "goterms_differentiated_cell_types.xlsx"))
 ```
 
 ```{r}
@@ -234,7 +245,16 @@ mkrs <- diff_mkrs %>%
   slice(1:10) %>% 
   pull(feature)
 
-tmp <- subset(so, subset = tumor_cell_type %in% diff_pops)
+tmp <- subset(so, 
+              subset = tumor_cell_type %in% c(
+                "SHH_Differentiated (GRIA2, GOLGA8A, MALAT1) #1",
+                "SHH_Differentiated (STMN2/4, MLLT1, NHLH1/2) #4",
+                "GP3_Differentiated (GOLGA8A, MALAT1) #0",
+                "GP3_Differentiated Photoreceptor (NRL) #2",
+                "GP4_Differentiated (GRIA2, GOLGA8A, MALAT1) #0",
+                "GP4_Differentiated Photoreceptor (NRL) #5")
+)
+
 tmp@assays$TF <- NULL
 tmp <- ScaleData(tmp, features = mkrs)
 
@@ -267,7 +287,16 @@ mkrs <- undiff_mkrs %>%
   slice(1:10) %>% 
   pull(feature)
 
-tmp <- subset(so, subset = tumor_cell_type %in% undiff_pops)
+tmp <- subset(so, 
+              subset = tumor_cell_type %in% c(
+                "SHH_Undifferentiated (RPGs and SFRP1) #0",
+                "SHH_Undifferentiated (RPGs and BTF3) #2",
+                "GP3_Undifferentiated (RPGs and BTF3) #1",
+                "GP3_Undifferentiated (MYC, FOXQ1/F2) #4",
+                "GP4_Undifferentiated (RPGs, STMN1/2, EOMES) #1",
+                "GP4_Undifferentiated (RPGs, STMN1/2) #2")
+)
+
 tmp@assays$TF <- NULL
 tmp <- ScaleData(tmp, features = mkrs)
 
@@ -292,8 +321,6 @@ hmap
 
 
 ### Cell cycle differences
-
-GP4 
 
 ```{r}
 plts <- plot_feature(sos$GP4, c("tumor_cell_type", 
