@@ -450,25 +450,45 @@ new_ids <- c(
   )
 
 so$tumor_cell_type_shh <- new_ids[as.character(so$coarse_clusters_shh_harmony)]
-plot_harmony(so, "tumor_cell_type_shh")
+# use andy's names
+new_ids <- c(
+    "3" = "SHH-A1",
+    "5" = "SHH-A2",
+    "0" = "SHH-B1",
+    "2" = "SHH-B2",
+    "1" = "SHH-C1",
+    "4" = "SHH-C2",
+    "6" = "SHH-X1"
+  )
+
+so$tumor_subpopulations_shh <- new_ids[as.character(so$coarse_clusters_shh_harmony)]
+
+plot_harmony(so, c("tumor_cell_type_shh", "tumor_subpopulations_shh"))
 ```
 
 Back add the cell classifications to all neoplastic object
 
 ```{r}
 so_mdata <- get_metadata(so) %>% 
-  select(cell, tumor_cell_type_shh)
+  select(cell, tumor_cell_type_shh, tumor_subpopulations_shh)
 
 so_neo <- qread(file.path("objects", "preprocess", "all_neoplastic.qs"))
 
 new_mdata <- get_metadata(so_neo) %>% 
-  select(cell, tumor_cell_types_all_subgroups) %>% 
+  select(cell,
+         tumor_cell_types_all_subgroups, 
+         tumor_cell_type_subgroup_specific,
+         tumor_subpopulation) %>% 
   left_join(so_mdata, by = "cell") %>% 
   mutate(tumor_cell_type_subgroup_specific = ifelse(!is.na(tumor_cell_type_shh),
                                                     str_c("SHH_", tumor_cell_type_shh),
-                                                    NA))
+                                                    tumor_cell_type_subgroup_specific),
+         tumor_subpopulations_shh = ifelse(!is.na(tumor_subpopulations_shh),
+                                      tumor_subpopulations_shh,
+                                      tumor_subpopulation))
 
 so_neo$tumor_cell_type_subgroup_specific <- new_mdata$tumor_cell_type_subgroup_specific
+so_neo$tumor_subpopulation <- new_mdata$tumor_subpopulations_shh
 
 new_mdata <- so_mdata %>% 
   left_join(get_metadata(so_neo), by = "cell") %>% 

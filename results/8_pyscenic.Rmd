@@ -186,7 +186,8 @@ dir.create(file.path(tbls_dir, "gp3"), showWarnings = FALSE)
 ```{r}
 so <- qread(file.path(obj_dir,"gp34", "gp3_only.qs"), nthreads = 4, use_alt_rep = FALSE)
 
-grp34_data <- tf_dat$gp3_only %>%
+# need to rerun with gp3 
+grp34_data <- tf_dat$gp34 %>%
   as.data.frame() %>%
   column_to_rownames("Cell") %>%
   as.matrix() %>% 

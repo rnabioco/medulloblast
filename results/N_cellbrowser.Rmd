@@ -84,6 +84,9 @@ so$tumor_cell_type_subgroup_specific <- ifelse(is.na( so$tumor_cell_type_subgrou
 
 so$tumor_cell_types_all_subgroups <-  str_replace_all(so$tumor_cell_types_all_subgroups, ",", " ")
 
+so$tumor_subpopulation <- ifelse(is.na(so$tumor_subpopulation),
+                                 "not-defined",
+                                 so$tumor_subpopulation)
 cols_to_keep <- c(
   `genes per cell` = "nFeature_RNA",
   `UMIs per cell` = "nCount_RNA",
@@ -98,6 +101,7 @@ cols_to_keep <- c(
   `Cell Cycle Phase` = "Phase",
   `Subgroup specific tumor cell types` = "tumor_cell_type_subgroup_specific",
   `All subgroup tumor cell types` = "tumor_cell_types_all_subgroups",
+  `Subgroup subpopulations` = "tumor_subpopulation",
   unaligned_cluster_diversity = "unaligned_cluster_diversity", 
   aligned_cluster_diversity = "aligned_cluster_diversity"
   )
@@ -116,7 +120,12 @@ make_cellbrowser(so,
                                radius = 2),
                  description = list(    
                    title = "Medulloblastoma Neoplastic cells",
-                   description = "Only neoplastic cells are shown, includes WNT subgroup. There are both unaligned and aligned projections. Includes cell type labels defined from examining all tumors in a harmonized projection, and cell types defined by harmonizing each subgroup independently."
+                   description = str_c(c("Only neoplastic cells are shown, includes WNT subgroup. There are both unaligned and aligned projections. Includes cell type labels defined from examining all tumors in a harmonized projection, and cell types defined by harmonizing each subgroup independently.  ",
+                   "",
+                   "##### Changelog:  ",
+                   "2020-04-29 Added Subpopulation designation (e.g. GP3-A1,SHH-B1)  "),
+                   collapse = "\n")
+                    
                  )
 )
 
@@ -151,7 +160,8 @@ cols_to_keep <- c(
   unaligned_cluster_diversity = "unaligned_cluster_diversity", 
   aligned_cluster_diversity = "aligned_cluster_diversity",
   `SHH tumor cell types` = "tumor_cell_type_shh",
-  `All subgroup tumor cell types` = "tumor_cell_types_all_subgroups"
+  `All subgroup tumor cell types` = "tumor_cell_types_all_subgroups",
+  `Subpopulations` = "tumor_subpopulations_shh"
   )
 
 #so <- RunALRA(so,  setDefaultAssay = FALSE)
@@ -165,8 +175,8 @@ make_cellbrowser(so,
                      "cell cycle phase"), 
                  project = "medulloblastoma_neoplastic_shh",
                  outdir = cb_outdir,
-                 marker_file = "markers/shh/harmony_markers_shh.tsv",
-                 ident = "clusters_aligned",
+                 marker_file = "markers/shh/harmony_subpopulation_markers_SHH.tsv",
+                 ident = "Subpopulations",
                  embeddings = def_embeddings(so),
                  skip_expr_matrix = TRUE, 
                  assays = c("ALRA_" = "alra"),
@@ -174,8 +184,13 @@ make_cellbrowser(so,
                                radius = 2),
                  description = list(    
                    title = "Medulloblastoma SHH subgroup",
-                   description = "Neoplastic cells from SHH subgroup.
-                   There are both unaligned and aligned projections"
+                   description = str_c(c(
+                   "Neoplastic cells from SHH subgroup.  ",
+                   "There are both unaligned and aligned projections  ",
+                   "",
+                   "##### Changelog:  ",
+                   "2020-04-29 Added Subpopulation designation (e.g. SHH-B1)  "),
+                   collapse = "\n")
                  )
 )
 ```
@@ -262,10 +277,11 @@ cols_to_keep <- c(
   unaligned_cluster_diversity = "unaligned_cluster_diversity", 
   aligned_cluster_diversity = "aligned_cluster_diversity",
   `GP3 tumor cell types` = "tumor_cell_type_gp3",
-  `All subgroup tumor cell types` = "tumor_cell_types_all_subgroups"
+  `All subgroup tumor cell types` = "tumor_cell_types_all_subgroups",
+  `Subpopulations` = "tumor_subpopulations_gp3"
   )
 
-#so <- RunALRA(so,  setDefaultAssay = FALSE)
+so <- RunALRA(so,  setDefaultAssay = FALSE)
 #gc()
 
 scbp::make_cellbrowser(so, 
@@ -277,16 +293,21 @@ scbp::make_cellbrowser(so,
                      "cell cycle phase"), 
                  project = "medulloblastoma_neoplastic_gp3_only",
                  outdir = cb_outdir,
-                 marker_file = "markers/gp34/harmony_markers_gp3_only.tsv",
-                 ident = "clusters_aligned",
+                 marker_file = "markers/gp3/harmony_subpopulation_markers_gp3.tsv",
+                 ident = "Subpopulations",
                  embeddings = def_embeddings(so),
                  skip_expr_matrix = TRUE,
                  assays = c("ALRA_" = "alra"),
                    config = list(priority = 5),
                  description = list(    
                    title = "Medulloblastoma Group 3 subgroup",
-                   description = "Neoplastic cells from group3 subgroup.
-                   There are both unaligned and aligned projections"
+                   description = str_c(c(
+                   "Neoplastic cells from group3 subgroup.  ",
+                   "There are both unaligned and aligned projections  ",
+                   "",
+                   "##### Changelog:  ",
+                   "2020-04-29 Added Subpopulation designation (e.g. GP3-B1)  "),
+                   collapse = "\n")
                  )
 )
 ```
@@ -322,7 +343,8 @@ cols_to_keep <- c(
   unaligned_cluster_diversity = "unaligned_cluster_diversity", 
   aligned_cluster_diversity = "aligned_cluster_diversity",
   `GP4 tumor cell types` = "tumor_cell_type_gp4",
-  `All subgroup tumor cell types` = "tumor_cell_types_all_subgroups"
+  `All subgroup tumor cell types` = "tumor_cell_types_all_subgroups",
+  `Subpopulations` = "tumor_subpopulations_gp4"
   )
 
 #so <- RunALRA(so,  setDefaultAssay = FALSE)
@@ -336,16 +358,21 @@ make_cellbrowser(so,
                      "cell cycle phase"), 
                  project = "medulloblastoma_neoplastic_gp4_only",
                  outdir = cb_outdir,
-                 marker_file = "markers/gp34/harmony_markers_gp4_only.tsv",
-                 ident = "clusters_aligned",
+                 marker_file = "markers/gp4/harmony_subpopulation_markers_gp4.tsv",
+                 ident = "Subpopulations",
                  embeddings = def_embeddings(so),
                  skip_expr_matrix = TRUE,
                  assays = c("ALRA_" = "alra"),
                 config = list(priority = 6),
                  description = list(    
                    title = "Medulloblastoma Group 4 subgroup",
-                   description = "Neoplastic cells from group4 subgroup.
-                   There are both unaligned and aligned projections"
+                   description = str_c(c(
+                   "Neoplastic cells from group4 subgroup.  ",
+                   "There are both unaligned and aligned projections  ",
+                   "",
+                   "##### Changelog:  ",
+                   "2020-04-29 Added Subpopulation designation (e.g. GP4-B1)  "),
+                   collapse = "\n")
                  )
 )
 ```

@@ -472,7 +472,7 @@ qsave(so, file.path(obj_dir, "gp34.qs"), nthreads = 4)
 ## Group3 only analysis
 
 ```{r}
-so_gp3 <- subset(so, subset = subgroup == "GP3")
+so_gp3 <- subset(so, subset = subgroup %in% c("GP3", "GP3/4"))
 so_gp4 <- subset(so, subset = subgroup == "GP4")
 
 rm(so); gc()
@@ -490,8 +490,9 @@ so <- FindVariableFeatures(
   verbose = FALSE
 )
 
-so <- ScaleData(so, features = VariableFeatures(so), 
-                  verbose = TRUE)
+so <- ScaleData(so,
+                features = VariableFeatures(so), 
+                verbose = TRUE)
 
 so <- RunPCA(so, 
              features = VariableFeatures(so),
@@ -501,11 +502,10 @@ so <- RunPCA(so,
 
 ElbowPlot(so, ndims = 50)
 
-# make graphs and use graphs for UMAP
 so <- FindNeighbors(so, 
-                      reduction = "pca", 
-                      dims = 1:30, 
-                      k.param = 20L)
+                    reduction = "pca", 
+                    dims = 1:30, 
+                    k.param = 20L)
 
 so <- RunUMAP(so, 
               dims = 1:50, 
@@ -521,15 +521,13 @@ so$coarse_clusters_gp3 <- so$RNA_snn_res.0.1
 
 Idents(so) <- "coarse_clusters_gp3"
 
-plot_umap(so, "coarse_clusters_gp3")
-plot_umap(so, "UPN")
-plot_umap(so, "subtype")
+plot_umap(so, c("coarse_clusters_gp3", "UPN", "subtype"))
 ```
 
 ## Harmonize
 
 ```{r}
-set.seed(seed_value)
+set.seed(seed_value + 1)
 so <- RunHarmony(so,
                  "UPN", 
                  theta = 1.5,
@@ -538,8 +536,8 @@ so <- RunHarmony(so,
 so <- RunUMAP(so, 
               reduction = "harmony", 
               dims = 1:30, 
-              min.dist = 0.3,
-              n.neighbors = 30L,
+              min.dist = 0.4,
+              n.neighbors = 20L,
               seed.use =  seed_value,
               reduction.name = "harmony_umap",
               reduction.key = "UMAP_Harmony_")
@@ -547,14 +545,10 @@ so <- RunUMAP(so,
 so <- FindNeighbors(so, reduction = "harmony", dims = 1:30)
 so <- FindClusters(so, resolution = 0.2, random.seed =  seed_value)
 
-
 so$coarse_clusters_gp3_harmony <- so$seurat_clusters
 Idents(so) <- "coarse_clusters_gp3_harmony"
 
-plot_harmony(so, "NRL")
-plot_harmony(so, "UPN")
-plot_harmony(so, "subtype")
-plot_harmony(so, "coarse_clusters_gp3_harmony")
+plot_harmony(so, c("NRL", "UPN","subtype", "coarse_clusters_gp3_harmony"))
 ```
 
 
@@ -714,33 +708,52 @@ go_res[["result"]] %>%
 
 new_ids <- c(
     "0" = "Differentiated (GOLGA8A, MALAT1) #0",
-    "2" = "Differentiated Photoreceptor (NRL) #2",
+    "1" = "Differentiated Photoreceptor (NRL) #1",
     "3" = "Cell Cycle #3" ,
-    "1" = "Undifferentiated (RPGs and BTF3) #1",
+    "2" = "Undifferentiated (RPGs and BTF3) #2",
     "4" = "Undifferentiated (MYC, FOXQ1/F2) #4"
   )
 
 so$tumor_cell_type_gp3 <- new_ids[as.character(so$coarse_clusters_gp3_harmony)]
-plot_harmony(so, "tumor_cell_type_gp3")
+
+# use andy's names
+new_ids <- c(
+    "0" = "GP3-C1",
+    "1" = "GP3-C2",
+    "3" = "GP3-A" ,
+    "2" = "GP3-B1",
+    "4" = "GP3-B2"
+  )
+
+so$tumor_subpopulations_gp3 <- new_ids[as.character(so$coarse_clusters_gp3_harmony)]
+
+plot_harmony(so, c("tumor_cell_type_gp3", "tumor_subpopulations_gp3"))
 ```
 
 Back add the cell classifications to all neoplastic object
 
 ```{r}
 so_mdata <- get_metadata(so) %>% 
-  select(cell, tumor_cell_type_gp3)
+  select(cell, tumor_cell_type_gp3, tumor_subpopulations_gp3)
 
 so_neo <- qread(file.path("objects", "preprocess", "all_neoplastic.qs"))
 
 new_mdata <- get_metadata(so_neo) %>% 
-  select(cell, tumor_cell_types_all_subgroups, tumor_cell_type_subgroup_specific) %>% 
+  select(cell,
+         tumor_cell_types_all_subgroups, 
+         tumor_cell_type_subgroup_specific,
+         tumor_subpopulation) %>% 
   left_join(so_mdata, by = "cell") %>% 
   mutate(tumor_cell_type_subgroup_specific = ifelse(!is.na(tumor_cell_type_gp3),
                                                     str_c("GP3_", tumor_cell_type_gp3),
-                                                    tumor_cell_type_subgroup_specific))
+                                                    tumor_cell_type_subgroup_specific),
+         tumor_subpopulations_gp3 = ifelse(!is.na(tumor_subpopulations_gp3),
+                                      tumor_subpopulations_gp3,
+                                      tumor_subpopulation))
+
 
 so_neo$tumor_cell_type_subgroup_specific <- new_mdata$tumor_cell_type_subgroup_specific
-
+so_neo$tumor_subpopulation <- new_mdata$tumor_subpopulations_gp3
 new_mdata <- so_mdata %>% 
   left_join(get_metadata(so_neo), by = "cell") %>% 
   select(cell, tumor_cell_types_all_subgroups)
@@ -999,25 +1012,52 @@ new_ids <- c(
     "8" = "Exclude: Single tumor #8"
   )
 so$tumor_cell_type_gp4 <- new_ids[as.character(so$coarse_clusters_gp4_harmony)]
-plot_harmony(so, "tumor_cell_type_gp4")
+
+# use andy's names
+new_ids <- c(
+    "1" = "GP4-B1",
+    "2" = "GP4-B2",
+    
+    "3" = "GP4-A1",
+    "4" = "GP4-A2",
+    
+    "0" = "GP4-C1",
+    "5" = "GP4-C2",
+    
+    "6" = "GP4-X1",
+    "7" = "GP4-X2",
+    "8" = "GP4-X3"
+  )
+
+so$tumor_subpopulations_gp4 <- new_ids[as.character(so$coarse_clusters_gp4_harmony)]
+
+plot_harmony(so, c("tumor_cell_type_gp4", "tumor_subpopulations_gp4"))
+
 ```
 
 Back add the cell classifications to all neoplastic object
 
 ```{r}
 so_mdata <- get_metadata(so) %>% 
-  select(cell, tumor_cell_type_gp4)
+  select(cell, tumor_cell_type_gp4, tumor_subpopulations_gp4)
 
 so_neo <- qread(file.path("objects", "preprocess", "all_neoplastic.qs"))
 
 new_mdata <- get_metadata(so_neo) %>% 
-  select(cell, tumor_cell_types_all_subgroups, tumor_cell_type_subgroup_specific) %>% 
+  select(cell,
+         tumor_cell_types_all_subgroups, 
+         tumor_cell_type_subgroup_specific,
+         tumor_subpopulation) %>% 
   left_join(so_mdata, by = "cell") %>% 
   mutate(tumor_cell_type_subgroup_specific = ifelse(!is.na(tumor_cell_type_gp4),
                                                     str_c("GP4_", tumor_cell_type_gp4),
-                                                    tumor_cell_type_subgroup_specific))
+                                                    tumor_cell_type_subgroup_specific),
+         tumor_subpopulations_gp4 = ifelse(!is.na(tumor_subpopulations_gp4),
+                                      tumor_subpopulations_gp4,
+                                      tumor_subpopulation))
 
 so_neo$tumor_cell_type_subgroup_specific <- new_mdata$tumor_cell_type_subgroup_specific
+so_neo$tumor_subpopulation <- new_mdata$tumor_subpopulations_gp4
 
 new_mdata <- so_mdata %>% 
   left_join(get_metadata(so_neo), by = "cell") %>% 
@@ -1033,7 +1073,7 @@ so$tumor_cell_types_all_subgroups <- new_mdata$tumor_cell_types_all_subgroups
 qsave(so, file.path(obj_dir, "gp4_only.qs"), nthreads = 4)
 qsave(so_neo, file.path("objects", "preprocess", "all_neoplastic.qs"))
 ```
-
+  
 
 ```{r, eval = FALSE, echo = FALSE}
 # for quick reloading as necessary

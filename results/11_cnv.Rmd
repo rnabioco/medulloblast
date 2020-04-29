@@ -1,0 +1,119 @@
+---
+title: "11_CNV"
+author: "Kent Riemondy RBI"
+date: "`r Sys.Date()`"
+knit: (function(inputFile, encoding) {
+  rmarkdown::render(inputFile, encoding = encoding, output_dir = "html") })
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_collapsed: false
+    theme: cosmo
+    highlight: tango
+    fig_caption: true
+    code_folding: hide
+    df_print: paged
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libs}
+source(here::here("/R/utils.R"))
+library(ComplexHeatmap)
+library(presto)
+library(openxlsx)
+library(gprofiler2)
+
+rmd_dir <- "cnvs"
+
+fig_dir <- file.path(fig_dir, rmd_dir)
+
+walk(fig_dir,
+     dir.create, 
+     showWarnings = FALSE)
+```
+
+
+```{r}
+subgroups <- c("SHH", "GP3", "GP4")
+
+sobj <- qread(file.path("objects", "preprocess", "so.qs"), nthreads = 4)
+
+sos[[1]] <- subset(sobj, subset = subgroup == subgroups[1])
+sos[[2]] <- subset(sobj, subset = subgroup == subgroups[2])
+sos[[3]] <- subset(sobj, subset = subgroup == subgroups[3])
+
+names(sos) <- subgroups
+```
+
+
+```{r}
+plot_umap(sos[[2]], c("UPN", "coarse_cell_type"))
+
+sos[[2]] <- infercnv::add_to_seurat(seurat_obj = sos[[2]], 
+                               infercnv_output_path = "inferCNV_v2/gp3/gp3")
+
+a <- read.table("inferCNV_v2/gp3/gp3/infercnv.19_HMM_predHMMi6.rand_trees.hmm_mode-subclusters.Pnorm_0.5.repr_intensities.observations.txt")
+
+colnames(a) <- str_remove(colnames(a), "^X")
+
+cells_to_examine <- intersect(colnames(a), colnames(sos[[2]]))
+
+to_plot <- data.frame(x = t(a["GNG4", cells_to_examine])
+                      
+
+to_plot <- cbind(t(a["GNG4", cells_to_examine]),
+                 y = sos[[2]]@assays$RNA@data["GNG4", cells_to_examine]) %>% 
+  as.data.frame()
+
+ggplot(z, aes(x = as.factor(GNG4), y = res)) + geom_boxplot()
+```
+
+
+```{r}
+a <- read.table("inferCNV_v2/gp4/gp4/expr.infercnv.dat")
+
+colnames(a) <- str_remove(colnames(a), "^X")
+
+cells_to_examine <- intersect(colnames(a), colnames(sos[[3]]))
+
+# calculate residuals from lm (expr ~ CNV)
+
+to_test <- rownames(a)
+
+cnv_res <- t(a[to_test, cells_to_examine])
+expr_res <- Matrix::t(sos[[3]]@assays$RNA@data[to_test, cells_to_examine])
+
+res_mat <- matrix(ncol = length(to_test), 
+                  nrow = nrow(expr_res))
+for(i in seq_along(to_test)){
+  gene <- to_test[i]
+  
+  res_mat[, i] <- lm(expr_res[, gene] ~ cnv_res[, gene]) %>% 
+    residuals(.) 
+}
+
+colnames(res_mat) <- to_test
+rownames(res_mat) <- rownames(expr_res)
+
+scaled_mat <- t(scale(res_mat))
+
+so_small <- sos[[3]][rownames(scaled_mat), colnames(scaled_mat)]
+
+so_small <- FindVariableFeatures(so_small) %>% 
+  ScaleData(.) %>% 
+  RunPCA() %>% 
+  RunUMAP(dims = 1:30)
+
+so_small <- SetAssayData(so_small, slot = "scale.data", new.data = scaled_mat, assay = "RNA") 
+so_small <- RunPCA(so_small) %>% 
+  RunUMAP(dims = 1:30, reduction.name = "res_umap")
+
+plot_umap(so_small, "UPN")
+plot_feature(so_small, "UPN", 
+             embedding = "res_umap")
+```

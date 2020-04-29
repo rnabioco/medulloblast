@@ -27,6 +27,171 @@ library(ComplexHeatmap)
 library(presto)
 library(openxlsx)
 library(gprofiler2)
+library(ggrepel)
+
+```
+
+
+```{r}
+
+so_fns <- file.path(obj_dir, c(
+  file.path("shh", "shh.qs"),
+  file.path("gp34", "gp3_only.qs"),
+  file.path("gp34", "gp4_only.qs")))
+                    
+clusters <- c(
+  "tumor_subpopulations_shh",
+  "tumor_subpopulations_gp3",
+  "tumor_subpopulations_gp4"
+)
+
+sos <- map(so_fns, 
+            ~qread(.x, nthreads = 4, use_alt_rep = FALSE))
+
+names(sos) <- c("SHH", "GP3", "GP4")
+
+```
+
+## Regenerate marker tables etc.
+
+Using the new cell type labels
+
+```{r}
+all_mrkrs <- pmap(
+  list(sos,
+       names(sos),
+       clusters
+  ),
+  function(so, id, cluster){
+    
+    mk_dir <- file.path(mkrs_dir, id)
+    dir.create(mk_dir, showWarnings = FALSE)
+    tbl_dir <- file.path(tbls_dir, id)
+    dir.create(tbl_dir, showWarnings = FALSE)
+    
+    # markers
+    full_mkrs <-  wilcoxauc(so, cluster) 
+    
+    mkrs <- filter(full_mkrs, logFC > 0, padj < 0.05, pct_in > 0.10) %>% 
+      group_by(group) %>% 
+      arrange(padj, desc(logFC), .by_group = TRUE)
+    
+    mkrs %>% 
+      write_tsv(file.path(mk_dir, str_c("harmony_subpopulation_markers_", id, ".tsv")))
+    
+    mkrs %>% 
+      ungroup() %>% 
+      split(., .$group) %>% 
+      write_markers_xlsx(., file.path(tbl_dir,
+                                      str_c("harmony_subpopulation_markers_", id, ".xlsx")))
+    
+    # Go terms using top 500 markers 
+    mkrs <- mkrs %>% 
+      group_by(group) %>% 
+      slice(1:500)  
+    
+    mkrs_split <- split(mkrs, mkrs$group) %>% 
+      map(~pull(.x, feature))
+    
+    go_res <- gost(mkrs_split, 
+                   ordered_query = TRUE,
+                   sources = c("GO", 
+                               "KEGG", 
+                               "REAC", 
+                               "TF"))
+    
+    go_res[["result"]] %>% 
+      mutate(parents = unlist(map(parents, ~str_c(.x, collapse = ",")))) %>% 
+      write_tsv(., file.path(tbl_dir, str_c("subpopulation_goterms_", id, ".tsv")))
+    
+    go_res[["result"]] %>% 
+      mutate(parents = unlist(map(parents, ~str_c(.x, collapse = ","))),
+             source = str_replace_all(source, "[[:punct:]]", " ")) %>% 
+      select(-significant) %>% 
+      split(., .$query) %>% 
+      openxlsx::write.xlsx(., file.path(tbl_dir, 
+                                        str_c("subpopulation_goterms_", id, ".xlsx")))
+    
+    ## Average Expression
+    write_avg_expr(so,  
+                   cluster,
+                   file.path(tbl_dir, 
+                             str_c("subpopulation_avgexpr_", id, ".csv")))
+    ## Cell counts
+    cell_count_mat <- get_cell_count_matrix(so, "UPN", cluster)
+    cell_count_mat[is.na(cell_count_mat)] <- 0L
+    cell_count_mat %>% 
+      tibble::rownames_to_column("UPN") %>% 
+      write_csv(file.path(tbl_dir, 
+                          str_c("subpopulation_cell_counts_", id, ".csv")))
+    
+    ## marker matrix 
+    full_marker_matrix <- full_mkrs %>%  top_marker_matrix(.) 
+    
+    topn_marker_matrix <- full_mkrs %>% top_marker_matrix(n = 200) 
+    
+    out <- list(avg_expression = read_csv(file.path(tbl_dir, 
+                                                    str_c("subpopulation_avgexpr_", 
+                                                          id,
+                                                          ".csv"))),
+                logFC_all = full_marker_matrix,
+                top_200_logFC = topn_marker_matrix)
+    
+    openxlsx::write.xlsx(out, 
+                         file.path(tbl_dir, 
+                                   str_c("subpopulation_expression_logfc_summaries_",
+                                         id,
+                                         ".xlsx")))
+    
+    #full count matrix
+    GetAssayData(so, "counts") %>% 
+      as.matrix(.) %>% 
+      as.data.frame() %>% 
+      rownames_to_column("gene") %>% 
+      data.table::fwrite(., file.path(tbl_dir, str_c(id, 
+                                                     "_count_matrix.csv.gz")),
+                         sep = ",",
+                         compress = "gzip")
+    
+    # expression matrix filtered at least 25 cells express the gene
+    expr_mat <- GetAssayData(so, "data")
+    expr_mat <- expr_mat[Matrix::rowSums(expr_mat > 0) >= 25, ]
+    
+    expr_mat %>% 
+      as.matrix(.) %>% 
+      as.data.frame() %>% 
+      rownames_to_column("gene") %>% 
+      data.table::fwrite(., file.path(tbl_dir, str_c(id, "_expr_matrix.csv.gz")),
+                         sep = ",",
+                         compress = "gzip")
+    
+    ## TF markers
+    Idents(so) <- cluster
+    DefaultAssay(so) <- "TF"
+    
+    so_tf_markers <- wilcoxauc(so,
+                               group_by = cluster, 
+                               seurat_assay = "TF") %>% 
+      filter(logFC > 0, 
+             padj < 0.05) %>% 
+      group_by(group) %>% 
+      arrange(padj, desc(logFC))
+    
+    write_tsv(so_tf_markers, file.path(tbl_dir, 
+                                       str_c("subpopulation_tf_activities_", id, ".tsv")))
+    
+    write_markers_xlsx(split(so_tf_markers, so_tf_markers$group),
+                       path = file.path(tbl_dir, 
+                                        str_c("subpopulation_tf_activities_", id, ".xlsx")),
+                       description_string = "Transcription factor regulons derived from PyScenic that are significantly enriched in each cluster")
+    
+    mkrs
+  })
+
+
+```
+
+```{r}
 
 rmd_dir <- "cell_type_signature_comparisons"
 
@@ -43,62 +208,15 @@ walk(c(fig_dir, mkrs_dir, tbls_dir, go_dir, xcel_markers_dir),
 
 
 ```{r}
-
-so_fns <- file.path(obj_dir, c(
-  file.path("shh", "shh.qs"),
-  file.path("gp34", "gp3_only.qs"),
-  file.path("gp34", "gp4_only.qs")))
-                    
-clusters <- c(
-  "tumor_cell_type_shh",
-  "tumor_cell_type_gp3",
-  "tumor_cell_type_gp4"
-)
-
-sos <- map(so_fns, 
-            ~qread(.x, nthreads = 4, use_alt_rep = FALSE))
-
-names(sos) <- c("SHH", "GP3", "GP4")
-
-# new_ids <- list(
-#   shh = c(
-#     "3" = "Cell cycle (G2M) #3",
-#     "5" = "Cell cycle (S) #5",
-#     "0" = "Undifferentiated (RPGs and SFRP1) #0",
-#     "2" = "Undifferentiated (RPGs and BTF3) #2",
-#     "1" = "Differentiated (GRIA2, GOLGA8A, MALAT1) #1",
-#     "4" = "Differentiated (STMN2/4, MLLT1, NHLH1/2) #4",
-#     "6" = "Exclude: Doublet/contamination #6"
-#   ),
-#   gp3 = c(
-#     "0" = "Differentiated (GOLGA8A, MALAT1) #0",
-#     "2" = "Differentiated Photoreceptor (NRL) #2",
-#     "3" = "Cell Cycle #3" ,
-#     "1" = "Undifferentiated (RPGs and BTF3) #1",
-#     "4" = "Undifferentiated (MYC, FOXQ1/F2) #4"
-#   ),
-#   gp4 = c(
-#     "0" = "Differentiated (GRIA2, GOLGA8A, MALAT1) #0",
-#     "5" = "Differentiated Photoreceptor (NRL) #5",
-#     "4" = "Cell Cycle (EZH2, Differentiated-like) #4",
-#     "3" = "Cell Cycle (STMN2, Undifferentiated-like) #3",
-#     "1" = "Undifferentiated (RPGs, STMN1/2, EOMES) #1",
-#     "2" = "Undifferentiated (RPGs, STMN1/2) #2",
-#     "6" = "Exclude: Unknown #6",
-#     "7" = "Exclude: Single tumor #7",
-#     "8" = "Exclude: Single tumor #8"
-#   )
-# )
-  
-```
-
-```{r}
 sos <- pmap(
   list(sos,
     names(sos),
     clusters),
             function(so, id, cluster){
-              so$tumor_cell_type <- str_c(id, "_", so[[cluster]][,1])
+              # drop the excluded populations
+              to_keep <- rownames(so@meta.data)[!str_detect(so[[cluster]][,1], "-X[0-9]$")]
+              so <- subset(so, cells = to_keep)
+              so$tumor_cell_type <- so[[cluster]][,1]
               so
             })
 
@@ -109,10 +227,10 @@ avg_expr <- pmap(list(
            function(x, id, cluster){
             Idents(x) <- "tumor_cell_type"
              mat <- AverageExpression(x)$RNA
-             x <- FindVariableFeatures(x, nfeatures = 3000)
+             x <- FindVariableFeatures(x, nfeatures = 2000)
              var_genes <- VariableFeatures(x)
              list(expr = mat,
-                  var_genes = var_genes[1:3000])
+                  var_genes = var_genes)
            })
 
 
@@ -123,12 +241,8 @@ var_genes <- map(avg_expr, ~.x$var_genes) %>%
 avg_expr_mat <- map(avg_expr, ~.x$expr) %>% 
   unname() %>% 
   do.call(cbind, .)
+
 avg_expr_mat <- avg_expr_mat[var_genes, ]
-
-
-cols_to_keep <- colnames(avg_expr_mat)[!colnames(avg_expr_mat) %in% c("GP4_Exclude: Unknown #6",
-                                                                      "SHH_Exclude: Doublet/contamination #6")]
-avg_expr_mat <- avg_expr_mat[, cols_to_keep]
 
 
 hmap <- Heatmap(cor(avg_expr_mat, method = "pearson"),
@@ -137,7 +251,7 @@ hmap <- Heatmap(cor(avg_expr_mat, method = "pearson"),
         row_names_gp = gpar(fontsize = 7),
         column_names_gp = gpar(fontsize = 7))
 
-pdf(file.path(fig_dir, "tumor_cell_type_correlation_matrix.pdf"),
+pdf(file.path(fig_dir, "tumor_subpopulation_correlation_matrix.pdf"),
     width = 9,
     height = 7)
 draw(hmap)
@@ -149,11 +263,55 @@ hmap
 
 ```{r}
 so <- merge(sos[[1]], sos[2:3])
-so <- subset(so, cells = names(so$tumor_cell_type[!so$tumor_cell_type %in% c("GP4_Exclude: Unknown #6",
-                                                                      "SHH_Exclude: Doublet/contamination #6")]))
 ```
 
+
 ```{r}
+var_marker_lst <- all_mrkrs %>%
+  map(~group_by(.x, group) %>% slice(1:100)) %>% 
+  bind_rows() %>% 
+  split(., .$group) %>% 
+  map(~pull(.x, feature))
+
+var_marker_lst <- var_marker_lst[!str_detect(names(var_marker_lst),  "-X[0-9]$")]
+
+
+for(i in seq_along(var_marker_lst)){
+  mrks <- var_marker_lst[[i]]
+  id <- names(var_marker_lst)[i]
+  so <- AddModuleScore(so, list(x = mrks), assay = "RNA", name = id, seed = 42)
+}
+
+# rename cols
+col_idxs <- match(str_c(make.names(names(var_marker_lst)), "1"), 
+                    colnames(so@meta.data))
+colnames(so@meta.data)[col_idxs] <- str_c(names(var_marker_lst), "-signature")
+
+all_tumor_cell_expression_scores <- get_metadata(so, embedding = NULL) %>% 
+  .[, c("cell", str_c(names(var_marker_lst), "-signature"))] %>% 
+  column_to_rownames("cell") %>% 
+  as.matrix()
+
+hmap <- Heatmap(cor(all_tumor_cell_expression_scores, method = "spearman"),
+         col = viridis::viridis(256),
+        name = "Correlation",
+        row_names_gp = gpar(fontsize = 7),
+        column_names_gp = gpar(fontsize = 7))
+
+pdf(file.path(fig_dir, "tumor_subpopulation_scores_all_tumor_cells_cor_matrix.pdf"),
+    width = 9,
+    height = 7)
+  draw(hmap)
+dev.off()
+
+hmap
+```
+
+
+
+##
+
+```{r, eval = FALSE}
 all_tumor_mkrs <- wilcoxauc(so, "tumor_cell_type")
 
 undiff_pops <- str_subset(unique(so$tumor_cell_type), "_Undifferentiated")
@@ -197,7 +355,7 @@ write.xlsx(top_undiff_mkrs, file.path(xcel_markers_dir,
 ```
 
 
-```{r}
+```{r, eval = FALSE}
 # Use top 500 markers   
 mkrs_split <- map(top_undiff_mkrs, ~pull(.x[1:500, ], feature))
 
@@ -234,7 +392,7 @@ go_res[["result"]] %>%
   openxlsx::write.xlsx(., file.path(go_dir, "goterms_differentiated_cell_types.xlsx"))
 ```
 
-```{r}
+```{r, eval = FALSE}
 mkrs <- diff_mkrs %>% 
   filter(padj < 0.05,
          logFC > 0, 
@@ -322,7 +480,7 @@ hmap
 
 ### Cell cycle differences
 
-```{r}
+```{r, eval = FALSE}
 plts <- plot_feature(sos$GP4, c("tumor_cell_type", 
                         "Phase",
                         "MKI67",
@@ -363,7 +521,7 @@ save_plot(file.path(fig_dir, "gp4_cell_type_umap.pdf"),
 ```
 
 
-```{r}
+```{r, eval = FALSE}
 
 plts <- plot_feature(sos$GP3, c("tumor_cell_type", 
                         "Phase",
@@ -405,7 +563,7 @@ save_plot(file.path(fig_dir, "gp3_cell_type_umap.pdf"),
 
 
 
-```{r}
+```{r, eval = FALSE}
 
 plts <- plot_feature(sos$SHH, c("tumor_cell_type", 
                         "Phase",
