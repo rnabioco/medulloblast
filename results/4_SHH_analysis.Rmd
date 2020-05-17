@@ -508,3 +508,191 @@ qsave(so_neo, file.path("objects", "preprocess", "all_neoplastic.qs"))
 ```{r, eval = FALSE}
 so <- qread(file.path(obj_dir, "shh.qs"), nthreads = 4, use_alt_rep = FALSE)
 ```
+
+
+## Generate additional subclusters
+
+```{r}
+cl_dir <- "additional_clustering"
+
+fig_dir <- file.path(fig_dir, cl_dir)
+mkrs_dir <- file.path(mkrs_dir, cl_dir)
+tbls_dir <- file.path(tbls_dir, cl_dir)
+
+walk(c(fig_dir, mkrs_dir, tbls_dir),
+     dir.create, showWarnings = F)
+```
+
+```{r}
+seed_value <- 20200515
+so <- FindClusters(so, resolution = 0.7, random.seed = seed_value)
+cluster_cols <- str_subset(colnames(so@meta.data), "RNA_snn_res")
+plot_harmony(so, cluster_cols)
+
+so$refined_clusters_shh_harmony <- so$RNA_snn_res.0.7
+
+plot_harmony(so, "refined_clusters_shh_harmony")
+```
+
+
+```{r}
+# make labels based on subpoplutation labels
+
+mdata <- get_metadata(so) %>% 
+  select(cell, tumor_subpopulations_shh, refined_clusters_shh_harmony)
+
+so <- mdata %>% 
+  group_by(tumor_subpopulations_shh, refined_clusters_shh_harmony, .drop = FALSE) %>% 
+  summarize(n = n()) %>% 
+  group_by(refined_clusters_shh_harmony) %>% 
+  mutate(cluster_prop = n / sum(n)) %>% 
+  select(-n) %>%
+  group_by(refined_clusters_shh_harmony) %>% 
+  arrange(desc(cluster_prop)) %>% 
+  slice(1) %>% # get subpopulation assignment with highest proportion (all > 0.6)
+  group_by(tumor_subpopulations_shh) %>% 
+  arrange(refined_clusters_shh_harmony, .by_group = TRUE) %>% 
+  mutate(additional_subpop_label = as.integer(factor(refined_clusters_shh_harmony)),
+         new_label = str_c(tumor_subpopulations_shh, "-", additional_subpop_label)) %>% 
+  ungroup() %>% 
+  select(refined_clusters_shh_harmony, 
+         tumor_subpopulations_shh_refined = new_label) %>% 
+  left_join(mdata, ., by = c("refined_clusters_shh_harmony")) %>% 
+  column_to_rownames("cell") %>% 
+  select(tumor_subpopulations_shh_refined) %>% 
+  AddMetaData(so, .)
+  
+plot_harmony(so, "tumor_subpopulations_shh_refined")
+```
+
+
+
+
+
+## Markers
+
+```{r markers of each subgroup}
+full_mkrs <- wilcoxauc(so, "tumor_subpopulations_shh_refined")
+
+full_mkrs %>% 
+  write_tsv(file.path(mkrs_dir, "harmony_markers_shh_all.tsv"))
+
+mkrs <- filter(full_mkrs, logFC > 0, padj < 0.05, pct_in > 0.10) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC), .by_group = TRUE)
+
+mkrs %>% 
+  write_tsv(file.path(mkrs_dir, "harmony_markers_shh.tsv"))
+
+mkrs %>% 
+  ungroup() %>% 
+  split(., .$group) %>% 
+  write_markers_xlsx(.,
+                   file.path(tbls_dir, "harmony_markers_shh.xlsx"))
+```
+
+## Go Terms
+
+```{r}
+library(gprofiler2)
+library(ggrepel)
+# Use top 500 markers 
+mkrs <- read_tsv(file.path(mkrs_dir, 
+                    "harmony_markers_shh.tsv")) %>% 
+  filter( padj < 0.05) %>% 
+  group_by(group) %>% 
+  slice(1:500)
+
+mkrs_split <- split(mkrs, mkrs$group) %>% 
+  map(~pull(.x, feature))
+
+go_res <- gost(mkrs_split, 
+               ordered_query = TRUE,
+               sources = c("GO", 
+                          "KEGG", 
+                          "REAC", 
+                          "TF"))
+
+go_res[["result"]] %>% 
+  mutate(parents = unlist(map(parents, ~str_c(.x, collapse = ",")))) %>% 
+  write_tsv(., file.path(tbls_dir, "goterms_shh_clusters.tsv"))
+
+go_res[["result"]] %>% 
+  mutate(parents = unlist(map(parents, ~str_c(.x, collapse = ","))),
+         source = str_replace_all(source, "[[:punct:]]", " ")) %>% 
+  select(-significant) %>% 
+  split(., .$query) %>% 
+  openxlsx::write.xlsx(., file.path(tbls_dir, "goterms_shh_cluster.xlsx"))
+```
+ 
+## Heatmap of gene expression
+
+```{r}
+topx <- read_tsv(file.path(mkrs_dir, 
+                    "harmony_markers_shh.tsv")) %>% 
+  filter(padj < 0.05) %>% 
+   mutate(group = as.factor(as.integer(group))) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC), .by_group = TRUE) %>% 
+  slice(1:10)
+
+so <- ScaleData(so, features = rownames(so))
+
+p <- DoHeatmap(so, 
+               group.colors = discrete_palette_default,
+               features = unique(topx$feature),
+               group.by = "tumor_subpopulations_shh_refined",
+               angle = 0, 
+               raster = FALSE, 
+               draw.lines = TRUE)
+
+p <- p +
+  scale_fill_gradientn(colours = viridis::viridis(256),
+                       name = "Expression\nZ-scores")
+
+save_plot(file.path(fig_dir, "heatmap_markers_shh.pdf"), 
+          p,
+          base_width = 10,
+          base_height = 12)
+```
+
+
+```{r}
+plot_harmony(so, 
+             "tumor_subpopulations_shh_refined")
+
+write_avg_expr(so,  
+               "tumor_subpopulations_shh_refined",
+               file.path(tbls_dir, 
+                         "tumor_subpopulations_refined_avgexpr.tsv.gz"))
+
+
+cell_count_mat <- get_cell_count_matrix(so, "UPN", "tumor_subpopulations_shh_refined")
+
+cell_count_mat[is.na(cell_count_mat)] <- 0L
+
+cell_count_mat %>% 
+  tibble::rownames_to_column("UPN") %>% 
+write_csv(file.path(tbls_dir, 
+                         "tumor_subpopulations_refined_harmony_cell_counts.csv"))
+
+full_marker_matrix <- full_mkrs %>% 
+  top_marker_matrix(.) 
+  
+topn_marker_matrix <- full_mkrs %>% 
+  top_marker_matrix(n = 200) 
+
+out <- list(avg_expression = read_tsv(file.path(tbls_dir, "tumor_subpopulations_refined_avgexpr.tsv.gz")),
+     logFC_all = full_marker_matrix,
+     top_200_logFC = topn_marker_matrix)
+
+openxlsx::write.xlsx(out, 
+                     file.path(tbls_dir, "tumor_subpopulations_refined_shh_harmony_expression_logfc_summaries.xlsx"))
+```
+
+
+## save
+
+```{r}
+qsave(so, file.path(obj_dir, "shh.qs"), nthreads = 4)
+```

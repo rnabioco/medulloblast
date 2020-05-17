@@ -115,3 +115,19 @@ get_marker_summaries <- function(so,
 
   dplyr::lst(full_markers, mkrs)
 }
+
+
+
+get_alra_assay <- function(so, file_name, overwrite = FALSE){
+
+  ## only used to add to cellbrowser
+  if(overwrite || !file.exists(file_name)){
+    so <- RunALRA(so, setDefaultAssay = FALSE)
+    gc()
+    alra_assay <- so@assays$alra
+    qs::qsave(alra_assay, file_name)
+  } else {
+    alra_assay <- qs::qread(file_name)
+  }
+  alra_assay
+}

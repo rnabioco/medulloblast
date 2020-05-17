@@ -23,11 +23,14 @@ knitr::opts_chunk$set(echo = TRUE)
 Format seurats object into a UCSC cellbrowser. Note requires UCSC (`cellbrowser python package`[ https://cellbrowser.readthedocs.io/index.html]) 
 
 ```{r}
+source(here::here("/R/utils.R"))
 library(scbp)
 library(tidyverse)
 library(qs)
+library(Seurat)
 cb_outdir <- "cellbrowser"
-
+alra_objs <- file.path("objects", "alra")
+dir.create(alra_objs, recursive = TRUE, showWarnings = FALSE)
 def_embeddings <- function(so) {str_subset(names(so@reductions), "umap")}
 
 qread <- function(file, ...) {qs::qread(file, ..., nthreads = 4, use_alt_rep = FALSE)}
@@ -161,10 +164,14 @@ cols_to_keep <- c(
   aligned_cluster_diversity = "aligned_cluster_diversity",
   `SHH tumor cell types` = "tumor_cell_type_shh",
   `All subgroup tumor cell types` = "tumor_cell_types_all_subgroups",
-  `Subpopulations` = "tumor_subpopulations_shh"
+  `Subpopulations` = "tumor_subpopulations_shh",
+  `CNV count (methylation)` = "methyl_nCNV",
+  `SHH tumor cell types refined` = "tumor_subpopulations_shh_refined"
   )
 
-#so <- RunALRA(so,  setDefaultAssay = FALSE)
+so@assays$alra <- get_alra_assay(so,
+                                 file.path(alra_objs, "shh.qs"),
+                                 overwrite = FALSE)
 
 make_cellbrowser(so, 
                  column_list = cols_to_keep,
@@ -178,8 +185,9 @@ make_cellbrowser(so,
                  marker_file = "markers/shh/harmony_subpopulation_markers_SHH.tsv",
                  ident = "Subpopulations",
                  embeddings = def_embeddings(so),
-                 skip_expr_matrix = TRUE, 
-                 assays = c("ALRA_" = "alra"),
+                 skip_expr_matrix = FALSE, 
+                 assays = c("ALRA_" = "alra",
+                            "CNV_" = "CNV"),
                   config = list(priority = 3,  
                                radius = 2),
                  description = list(    
@@ -189,6 +197,16 @@ make_cellbrowser(so,
                    "There are both unaligned and aligned projections  ",
                    "",
                    "##### Changelog:  ",
+                   "2020-05-15 Added 'SHH tumor cell types refined', which contains more refined clustering to produce more gene signatures  ", 
+                   "2020-05-15 Added CNV metrics:   ",
+                   "",
+                   "* CNV count (methylation): # of CNVs based on methylation data  ",
+                   "* CNV calls per cell based on inferCNV have been added to the data matrix, which can be viewed by querying the 'Color by gene' tab for cnv metrics. The metrics are prefixed with 'CNV_' (e.g. CNV_has-cnv-chr9, CNV_proportion_cnv-chr22)  ",
+                   "  +  The fields has_cnv/has_loss/has_dupli are 0/1 boolean answers to whether respectively any kind of cnv, a loss or a duplication is found within the given chr.  ",
+"  +  proportion_cnv/proportion_loss/proportion_dupli is the proportion in number of genes that are part of any cnv/loss cnv/duplication cnv in the given chr.  ",
+"  +  proportion_scaled are similar to proportion but taking into account whether genes that are duplications/losses are of a single copy or two copies as a weight  ",
+"  +  top_loss_n/top_dupli_n are the n loss/duplication cnvs that cover the most genes  ",
+                    "",
                    "2020-04-29 Added Subpopulation designation (e.g. SHH-B1)  "),
                    collapse = "\n")
                  )
@@ -278,11 +296,15 @@ cols_to_keep <- c(
   aligned_cluster_diversity = "aligned_cluster_diversity",
   `GP3 tumor cell types` = "tumor_cell_type_gp3",
   `All subgroup tumor cell types` = "tumor_cell_types_all_subgroups",
-  `Subpopulations` = "tumor_subpopulations_gp3"
+  `Subpopulations` = "tumor_subpopulations_gp3",
+  `CNV count (methylation)` = "methyl_nCNV",
+  `GP3 tumor cell types refined` = "tumor_subpopulations_gp3_refined"
   )
 
-so <- RunALRA(so,  setDefaultAssay = FALSE)
-#gc()
+
+so@assays$alra <- get_alra_assay(so,
+                                 file.path(alra_objs, "gp3.qs"),
+                                 overwrite = FALSE)
 
 scbp::make_cellbrowser(so, 
                  column_list = cols_to_keep,
@@ -296,8 +318,9 @@ scbp::make_cellbrowser(so,
                  marker_file = "markers/gp3/harmony_subpopulation_markers_gp3.tsv",
                  ident = "Subpopulations",
                  embeddings = def_embeddings(so),
-                 skip_expr_matrix = TRUE,
-                 assays = c("ALRA_" = "alra"),
+                 skip_expr_matrix = FALSE,
+                 assays = c("ALRA_" = "alra",
+                            "CNV_" = "CNV"),
                    config = list(priority = 5),
                  description = list(    
                    title = "Medulloblastoma Group 3 subgroup",
@@ -306,7 +329,18 @@ scbp::make_cellbrowser(so,
                    "There are both unaligned and aligned projections  ",
                    "",
                    "##### Changelog:  ",
-                   "2020-04-29 Added Subpopulation designation (e.g. GP3-B1)  "),
+                    "2020-05-15 Added 'GP3 tumor cell types refined', which contains more refined clustering to produce more gene signatures  ", 
+                   "2020-05-15 Added CNV metrics:   ",
+                   "",
+                   "* CNV count (methylation): # of CNVs based on methylation data  ",
+                   "* CNV calls per cell based on inferCNV have been added to the data matrix, which can be viewed by querying the 'Color by gene' tab for cnv metrics. The metrics are prefixed with 'CNV_' (e.g. CNV_has-cnv-chr9, CNV_proportion_cnv-chr22)  ",
+                   "  +  The fields has_cnv/has_loss/has_dupli are 0/1 boolean answers to whether respectively any kind of cnv, a loss or a duplication is found within the given chr.  ",
+"  +  proportion_cnv/proportion_loss/proportion_dupli is the proportion in number of genes that are part of any cnv/loss cnv/duplication cnv in the given chr.  ",
+"  +  proportion_scaled are similar to proportion but taking into account whether genes that are duplications/losses are of a single copy or two copies as a weight  ",
+"  +  top_loss_n/top_dupli_n are the n loss/duplication cnvs that cover the most genes  ",
+                    "",
+                   "2020-04-29 Added Subpopulation designation (e.g. GP3-B1)  ",
+                   "2020-04-29 Reclustered to add in GP3/4 tumor 1167 cells  "),
                    collapse = "\n")
                  )
 )
@@ -344,10 +378,14 @@ cols_to_keep <- c(
   aligned_cluster_diversity = "aligned_cluster_diversity",
   `GP4 tumor cell types` = "tumor_cell_type_gp4",
   `All subgroup tumor cell types` = "tumor_cell_types_all_subgroups",
-  `Subpopulations` = "tumor_subpopulations_gp4"
-  )
+  `Subpopulations` = "tumor_subpopulations_gp4",
+  `CNV count (methylation)` = "methyl_nCNV",
+  `GP4 tumor cell types refined` = "tumor_subpopulations_gp4_refined"
+)
 
-#so <- RunALRA(so,  setDefaultAssay = FALSE)
+so@assays$alra <- get_alra_assay(so,
+                                 file.path(alra_objs, "gp4.qs"),
+                                 overwrite = FALSE)
 
 make_cellbrowser(so, 
                  column_list = cols_to_keep,
@@ -361,8 +399,9 @@ make_cellbrowser(so,
                  marker_file = "markers/gp4/harmony_subpopulation_markers_gp4.tsv",
                  ident = "Subpopulations",
                  embeddings = def_embeddings(so),
-                 skip_expr_matrix = TRUE,
-                 assays = c("ALRA_" = "alra"),
+                 skip_expr_matrix = FALSE,
+                 assays = c("ALRA_" = "alra",
+                            "CNV_" = "CNV"),
                 config = list(priority = 6),
                  description = list(    
                    title = "Medulloblastoma Group 4 subgroup",
@@ -371,6 +410,16 @@ make_cellbrowser(so,
                    "There are both unaligned and aligned projections  ",
                    "",
                    "##### Changelog:  ",
+                   "2020-05-15 Added 'GP4 tumor cell types refined', which contains more refined clustering to produce more gene signatures  ", 
+                   "2020-05-15 Added CNV metrics:   ",
+                   "",
+                   "* CNV count (methylation): # of CNVs based on methylation data  ",
+                   "* CNV calls per cell based on inferCNV have been added to the data matrix, which can be viewed by querying the 'Color by gene' tab for cnv metrics. The metrics are prefixed with 'CNV_' (e.g. CNV_has-cnv-chr9, CNV_proportion_cnv-chr22)  ",
+                   "  +  The fields has_cnv/has_loss/has_dupli are 0/1 boolean answers to whether respectively any kind of cnv, a loss or a duplication is found within the given chr.  ",
+"  +  proportion_cnv/proportion_loss/proportion_dupli is the proportion in number of genes that are part of any cnv/loss cnv/duplication cnv in the given chr.  ",
+"  +  proportion_scaled are similar to proportion but taking into account whether genes that are duplications/losses are of a single copy or two copies as a weight  ",
+"  +  top_loss_n/top_dupli_n are the n loss/duplication cnvs that cover the most genes  ",
+                    "",
                    "2020-04-29 Added Subpopulation designation (e.g. GP4-B1)  "),
                    collapse = "\n")
                  )

@@ -27,6 +27,7 @@ library(ComplexHeatmap)
 library(presto)
 library(openxlsx)
 library(gprofiler2)
+library(data.table)
 
 rmd_dir <- "cnvs"
 
@@ -37,19 +38,504 @@ walk(fig_dir,
      showWarnings = FALSE)
 ```
 
+## Strategy
+
+Tumors cells tend to cluster into largely patient specific clusters. However normal cells (i.e. immune and astrocytes) tend to cluster with cells from multiple patients. This argues that the heterogeneity present in each patient is not simply an artifact from experimental processing, but insteads reflects intrinsic heterogeneity. This hetergeneity could be driven by enviromental factors (tumor location, aggressivness, etc), or tumor genetics. Each patients CNV profile is hetergeneous, suggesting that CNV could driven expression variation, providing an explanation of the hetergeneous expression profiles.
+
+To assess this possibility, inferCNV was run to identify CNVs. The genes in these CNV regions will be compared to marker genes of each patients tumor. Need to ensure that markers that are down regulated are enriched in CNV regions that are lost and vice versa.
+
+Here is the coding for the inferCNV hmm results:
+0x: complete loss
+0.5x: loss of one copy
+1x: neutral
+1.5x: addition of one copy
+2x: addition of two copies
+3x: essentially a placeholder for >2x copies but modeled as 3x.
+
 
 ```{r}
-subgroups <- c("SHH", "GP3", "GP4")
+mkrs <- read_tsv(file.path(mkrs_dir, 
+                           "preprocess",
+                           "upn_markers_neoplastic_pos_and_neg.tsv"),
+                 col_types = c("ccnnnnnnnn")) %>% 
+  filter(padj < 0.01,
+         pct_in > 0.10,
+         abs(logFC) > log(1.5))
 
-sobj <- qread(file.path("objects", "preprocess", "so.qs"), nthreads = 4)
+subgroups <- c("shh","gp3", "gp4")
+names(subgroups) <- c("shh", "gp3", "gp4")
+cnv_reports <- map_dfr(subgroups,
+                   ~read_tsv(file.path("inferCNV_v2",
+                                       .x, 
+                                      .x,
+                   "HMM_CNV_predictions.HMMi6.hmm_mode-samples.Pnorm_0.5.pred_cnv_genes.dat")),
+                   .id = "subgroup") 
 
-sos[[1]] <- subset(sobj, subset = subgroup == subgroups[1])
-sos[[2]] <- subset(sobj, subset = subgroup == subgroups[2])
-sos[[3]] <- subset(sobj, subset = subgroup == subgroups[3])
+cnv_reports <- mutate(cnv_reports, 
+                      upn = str_split(cell_group_name,
+                                      "\\.", 
+                                      simplify = T)[, 1] %>%
+                        str_remove("malignant_"),
+                      change = case_when(
+                        subgroup %in% c("gp34", "shh") & state < 1 ~ "loss",
+                        !subgroup %in% c("gp34", "shh") & state < 3 ~ "loss",
+                        subgroup %in% c("gp34", "shh") & state > 1 ~ "gain",
+                        !subgroup %in% c("gp34", "shh") & state > 3 ~ "gain",
+                        TRUE ~ "neutral"
+                                      )) 
 
-names(sos) <- subgroups
+# get list of gnes up and down per UPN
+mkr_gene_list <- split(mkrs, mkrs$group) %>% 
+  map(~list(loss = filter(.x, logFC < 0) %>% pull(feature), 
+            gain = filter(.x, logFC > 0) %>% pull(feature) ))
+
+
+cnv_gene_list <- split(cnv_reports, cnv_reports$upn) %>%
+   map(~list(loss = filter(.x, change == "loss") %>% pull(gene), 
+            gain = filter(.x, change == "gain") %>% pull(gene)))
+
+upns <- intersect(names(mkr_gene_list), names(cnv_gene_list))
 ```
 
+
+```{r}
+
+calc_enrichment <- function(sample_success,
+                            pop_success,
+                            pop_size,
+                            sample_size){
+  x <- sample_success - 1
+  m <- pop_success 
+  n <- pop_size
+  k <- sample_size
+  1-phyper(x, m, n, k)
+}
+
+#get some idea of a good background number
+
+so <- readRDS("objects/all_neoplastic.rds")
+
+n_featues_per_patient <- map_int(upns, 
+                             function(upn){
+                               tmp <- subset(so, cells = rownames(so@meta.data)[so$orig.ident == upn])
+                               sum(Matrix::rowSums(GetAssayData(tmp, "counts")) > 0)
+                             })
+
+gene_pop_size <- median(n_featues_per_patient)
+
+res <- map_dfr(upns, 
+    function(upn){
+      x <- mkr_gene_list[[upn]]$loss
+      y <- cnv_gene_list[[upn]]$loss
+      pop_success_loss <- length(y)
+      sample_success_loss <- length(intersect(x, y))
+      sample_size_loss <- length(x)
+      
+      x <- mkr_gene_list[[upn]]$gain
+      y <- cnv_gene_list[[upn]]$gain
+      pop_success_gain <- length(y)
+      sample_success_gain <- length(intersect(x, y))
+      sample_size_gain <- length(x)
+      
+      sample_success <- sample_success_gain + sample_success_loss
+      pop_success <- pop_success_gain + pop_success_loss
+      sample_size <- sample_size_gain + sample_size_loss
+      
+      pop_size <- gene_pop_size
+      tibble(upn = upn,
+             n_shared = sample_success,
+             n_cnv_genes = pop_success,
+             n_mrks = sample_size,
+             pval = 1- phyper(sample_success - 1,
+                             pop_success, 
+                             pop_size, 
+                             sample_size))
+    }) 
+
+res <- res %>% 
+  mutate(prop_markers_in_cnv = n_shared / n_mrks,
+         prop_genes_in_cnv_in_genome = n_cnv_genes / gene_pop_size,
+         log2_effect_size = log2(prop_markers_in_cnv / prop_genes_in_cnv_in_genome))
+
+res
+```
+
+
+```{r}
+mdata <- so@meta.data %>% 
+  as_tibble() %>% 
+  select(UPN, subgroup) %>%
+  unique() 
+
+plt_dat <- res %>% 
+  left_join(mdata, by = c("upn" = "UPN")) %>% 
+  select(upn, 
+         subgroup,
+         `Marker genes\nin CNVs` = prop_markers_in_cnv, 
+         `CNV genes\nin transcriptome` = prop_genes_in_cnv_in_genome) %>% 
+  pivot_longer(cols = -c(upn, subgroup)) 
+
+p <- ggplot(plt_dat, aes(upn, value)) +
+  geom_col(aes(fill = name), position = position_dodge2()) +
+  labs(x = "",
+       y = "Proportion") +
+  facet_grid(subgroup ~ ., space = "free", scales = "free") + 
+  scale_fill_manual(name = "",
+                    values = palette_OkabeIto) + 
+  coord_flip() + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+        legend.position = "top",
+        strip.text = element_text(size = 6))
+
+save_plot("figs/cnv_marker_enrichment.pdf", p, base_asp = 0.75, base_height = 6.5)
+```
+For most tumors there is a signficant overlap between marker genes and CNV regions. 1202 and 1224 have non-significant overlap. 
+
+
+# Examine subclones
+
+For some tumors it appears that there are some subclones based on CNV. For this anslysis I will split each tumor into 2 subclones based on HClustering on the CNV results. Then genexpression between theses splits will be evaluated to see if there are DE genes. 
+
+```{r}
+library(ape)
+library(dendextend)
+library(scbp)
+so <- readRDS("objects/gp34.rds")
+
+subgroups <- c(
+  "shh",
+  "gp3",
+  "gp34",
+  "gp4"
+)
+
+trees <- map(subgroups,
+             ~read.tree(
+               file.path("inferCNV",
+             .x, .x,  "infercnv.observations_dendrogram.txt"))) 
+
+# merge dendograms, try to figure out reasonable split
+ds <- map(trees, 
+    ~map(.x, as.dendrogram)) %>% 
+  map(., 
+      ~Reduce(function(x, y){merge(x,y)}, .x))
+
+z <- labels(ds[[1]]) %>% str_split("_", simplify = TRUE) %>% .[, 1] %>% as.numeric(as.factor(.))
+
+a <- color_branches(ds[[1]], clusters = z) 
+plot(a)
+
+map(trees, 
+    ~map(.x, ~dendextend::cutree(.x, k = 2)) %>% unlist()) %>%
+  unlist() -> a
+
+so$cnv <- a[colnames(so)]
+so$cnv <- ifelse(is.na(so$cnv), -1,so$cnv)
+```
+
+```{r}
+
+to_plot <- c(
+  "cnv",
+  "UPN",
+  "nCount_RNA",
+  "subgroup"
+)
+
+map2(to_plot, 
+    c("by_feature",
+      "random",
+      "random",
+      "random"),
+    ~plot_feature(so, 
+               .x, 
+               pt_alpha = 0.7, 
+               sorted = .y,
+               embedding = "umap")) %>% 
+  plot_grid(plotlist = .)
+```
+
+```{r}
+plot_violin(get_metadata(so), "cnv", "nCount_RNA")
+
+```
+
+## Add CNV data to seurat objects/browser
+
+```{r}
+# from methylation data
+
+methyl_cnvs <- tibble::tribble(
+  ~'UPN', ~'methyl_nCNV',
+    "925",   6L,
+    "945",   7L,
+   "1028",   3L,
+   "1130",   6L,
+   "1167",   3L,
+   "1355",   7L,
+   "1433",   8L,
+    "753",   1L,
+    "934",   1L,
+    "966",   4L,
+    "996",  17L,
+   "1066",   2L,
+   "1070",   4L,
+   "1125",   9L,
+   "1155",   7L,
+   "1177",   2L,
+   "1195",   4L,
+   "1238",   9L,
+  "966_2",   5L,
+    "801",   9L,
+    "831",   2L,
+    "877",   2L,
+    "898",   3L,
+   "1224",   0L,
+   "1235",   3L,
+   "1325",   6L,
+   "1397",  14L,
+   "1416",   1L,
+   "1128",   1L
+  )
+```
+
+
+```{r}
+
+so_obj_fns <- c(
+  shh = file.path("objects", "shh", "shh.qs"),
+  gp3 = file.path("objects", "gp34", "gp3_only.qs"),
+  gp4 = file.path("objects", "gp34", "gp4_only.qs")
+)
+
+sos <- imap(so_obj_fns,~{
+  tmp_so <- qread(.x, nthreads = 4)
+  tmp <- infercnv::add_to_seurat(infercnv_output_path = file.path("inferCNV_v2", .y, .y))
+  hmm_pred <- read.table(file.path("inferCNV_v2", .y, .y, "map_metadata_from_infercnv.txt")) %>% 
+    as.matrix()
+  to_keep <- intersect(colnames(tmp_so), rownames(hmm_pred))
+  missing_cells <- setdiff(colnames(tmp_so), rownames(hmm_pred))
+  hmm_pred <- t(hmm_pred[to_keep, ])
+  
+  na_vals <- matrix(0L, 
+                    nrow = nrow(hmm_pred), 
+                    ncol = length(missing_cells))
+  rownames(na_vals) <- rownames(hmm_pred)
+  colnames(na_vals) <- missing_cells
+  hmm_pred <- cbind(hmm_pred, na_vals)
+  hmm_pred <- hmm_pred[, colnames(tmp_so)] 
+  
+  tmp_so[["CNV"]] <- CreateAssayObject(data = hmm_pred)
+  
+  if("methyl_nCNV" %in% colnames(tmp_so@meta.data)){
+    tmp_so$methyl_nCNV <- NULL
+  }
+  
+  tmp_so <- get_metadata(tmp_so) %>% 
+    select(cell, UPN) %>% 
+    left_join(methyl_cnvs, by = "UPN") %>% 
+    column_to_rownames("cell") %>% 
+    AddMetaData(tmp_so, .)
+
+  tmp_so
+})
+
+
+cnv_call_subset <- str_subset(rownames(sos$shh@assays$CNV@data), "has-cnv")
+
+# from infercnv github:
+# The fields has_cnv/has_loss/has_dupli are 0/1 boolean answers to whether respectively any kind of cnv, a loss or a duplication is found within the given chr.
+# proportion_cnv/proportion_loss/proportion_dupli is the proportion in number of genes that are part of any cnv/loss cnv/duplication cnv in the given chr.
+# proportion_scaled are similar to proportion but taking into account whether genes that are duplications/losses are of a single copy or two copies as a weight.
+# top_loss_n/top_dupli_n are the n loss/duplication cnvs that cover the most genes.
+
+tmp <- c("has-cnv-chr9",
+  "has-loss-chr9",
+  "has-dupli-chr9",
+  "proportion-cnv-chr9",
+  "proportion-loss-chr9",
+  "proportion-dupli-chr9",
+  "proportion-scaled-cnv-chr9",
+  "proportion-scaled-loss-chr9",
+  "proportion-scaled-dupli-chr9")
+
+plts <- map(sos, ~plot_umap(.x, c("methyl_nCNV", cnv_call_subset)) %>% 
+              plot_grid(plotlist = ., 
+                        nrow = 6, 
+                        ncol = 4,
+                        base_asp = 1.4))
+
+iwalk(plts,
+     ~save_plot(file.path(fig_dir,
+                          str_c(.y, "_cnv_overview.pdf")),
+                          .x,
+                nrow = 6,
+                ncol = 4,
+                base_asp = 1.4))
+
+walk2(sos, so_obj_fns, ~qsave(.x, .y))
+```
+
+# run once inferCNV finishes
+                    
+# hmm_pred <- read_tsv("inferCNV_v2/gp4/gp4/HMM_CNV_predictions.HMMi6.hmm_mode-samples.Pnorm_0.5.pred_cnv_regions.dat") %>% 
+#   separate(cell_group_name, c("id1", "id2"), sep = "\\.") %>% 
+#   mutate(UPN = str_remove(id1, "malignant_")) %>% 
+#   select(-id1, -id2) %>% 
+#   group_by(UPN) %>% 
+#   summarize(tx_nCNV = n())
+# 
+# gp4_so <- get_metadata(gp4_so) %>% 
+#   select(cell, UPN) %>% 
+#   left_join(hmm_pred, by = "UPN") %>% 
+#   column_to_rownames("cell") %>% 
+#   AddMetaData(gp4_so, .)
+# 
+# plot_umap(gp4_so, c("methyl_nCNV", "tx_nCNV"))
+```
+
+
+## Other
+
+```{r}
+a <- data.table::fread("inferCNV_v2/shh/shh/infercnv.observations.txt") %>% 
+  as.data.frame()
+rownames(a) <- a$V1
+a[, 1] <- NULL
+a <- as.matrix(a)
+
+range02 <- function(x, newMin, newMax){ (x - min(x))/(max(x)-min(x)) * (newMax - newMin) + newMin }
+
+cin_result <- apply(a,
+      2, 
+      function(x){
+        x <- range02(x, -1, 1)
+        sum(x^2)
+        #sum(abs(x - 1)) / length(x)
+      })
+
+cin_result <- data.frame(cell = names(cin_result),
+                         cin = cin_result,
+                         stringsAsFactors = FALSE)
+
+mdata <- get_metadata(sos$SHH)
+
+mdata <- inner_join(mdata, cin_result, by = "cell")
+
+mdata %>% 
+  ggplot(aes(UPN, cin)) + 
+  geom_violin()
+```
+
+```{r}
+shh_so <- qread(file.path("objects", "shh", "shh.qs"), nthreads = 4)
+Idents(shh_so) <- "UPN"
+avg_expr <- AverageExpression(shh_so)$RNA
+
+a <- infercnv::add_to_seurat(infercnv_output_path = "inferCNV_v2/shh/shh")
+
+
+hmm_pred <- read.table("inferCNV_v2/shh/shh/map_metadata_from_infercnv.txt") %>% 
+  as.matrix()
+hmm_pred <- t(hmm_pred[colnames(shh_so), ])
+
+shh_so[["CNV"]] <- CreateAssayObject(data = hmm_pred)
+
+
+shh_so <- get_metadata(shh_so) %>% 
+  select(cell, UPN) %>% 
+  left_join(methyl_cnvs, by = "UPN") %>% 
+  column_to_rownames("cell") %>% 
+  AddMetaData(shh_so, .)
+
+hmm_pred <- read_tsv("inferCNV_v2/shh/shh/HMM_CNV_predictions.HMMi6.hmm_mode-samples.Pnorm_0.5.pred_cnv_regions.dat") %>% 
+  separate(cell_group_name, c("id1", "id2"), sep = "\\.") %>% 
+  mutate(UPN = str_remove(id1, "malignant_")) %>% 
+  select(-id1, -id2) %>% 
+  group_by(UPN) %>% 
+  summarize(tx_nCNV = n())
+
+shh_so <- get_metadata(shh_so) %>% 
+  select(cell, UPN) %>% 
+  left_join(hmm_pred, by = "UPN") %>% 
+  column_to_rownames("cell") %>% 
+  AddMetaData(shh_so, .)
+
+plot_umap(shh_so, c("methyl_nCNV", "tx_nCNV"))
+```
+
+```{r}
+gp4_so <- qread(file.path("objects", "gp34", "gp4_only.qs"), nthreads = 4)
+Idents(gp4_so) <- "UPN"
+avg_expr <- AverageExpression(gp4_so)$RNA
+
+a <- infercnv::add_to_seurat(infercnv_output_path = "inferCNV_v2/gp4/gp4")
+
+hmm_pred <- read.table("inferCNV_v2/gp4/gp4/map_metadata_from_infercnv.txt") %>% 
+  as.matrix()
+hmm_pred <- t(hmm_pred[colnames(gp4_so), ])
+
+gp4_so[["CNV"]] <- CreateAssayObject(data = hmm_pred)
+
+
+gp4_so <- get_metadata(gp4_so) %>% 
+  select(cell, UPN) %>% 
+  left_join(methyl_cnvs, by = "UPN") %>% 
+  column_to_rownames("cell") %>% 
+  AddMetaData(gp4_so, .)
+
+hmm_pred <- read_tsv("inferCNV_v2/gp4/gp4/HMM_CNV_predictions.HMMi6.hmm_mode-samples.Pnorm_0.5.pred_cnv_regions.dat") %>% 
+  separate(cell_group_name, c("id1", "id2"), sep = "\\.") %>% 
+  mutate(UPN = str_remove(id1, "malignant_")) %>% 
+  select(-id1, -id2) %>% 
+  group_by(UPN) %>% 
+  summarize(tx_nCNV = n())
+
+gp4_so <- get_metadata(gp4_so) %>% 
+  select(cell, UPN) %>% 
+  left_join(hmm_pred, by = "UPN") %>% 
+  column_to_rownames("cell") %>% 
+  AddMetaData(gp4_so, .)
+
+plot_umap(gp4_so, c("methyl_nCNV", "tx_nCNV"))
+```
+
+
+```{r}
+gp3_so <- qread(file.path("objects", "gp34", "gp3_only.qs"), nthreads = 4)
+Idents(gp3_so) <- "UPN"
+avg_expr <- AverageExpression(gp3_so)$RNA
+
+a <- infercnv::add_to_seurat(infercnv_output_path = "inferCNV_v2/gp3/gp3")
+
+hmm_pred <- read.table("inferCNV_v2/gp3/gp3/map_metadata_from_infercnv.txt") %>% 
+  as.matrix()
+hmm_pred <- t(hmm_pred[colnames(gp3_so), ])
+
+gp3_so[["CNV"]] <- CreateAssayObject(data = hmm_pred)
+
+
+gp3_so <- get_metadata(gp3_so) %>% 
+  select(cell, UPN) %>% 
+  left_join(methyl_cnvs, by = "UPN") %>% 
+  column_to_rownames("cell") %>% 
+  AddMetaData(gp3_so, .)
+
+hmm_pred <- read_tsv("inferCNV_v2/gp3/gp3/HMM_CNV_predictions.HMMi6.hmm_mode-samples.Pnorm_0.5.pred_cnv_regions.dat") %>% 
+  separate(cell_group_name, c("id1", "id2"), sep = "\\.") %>% 
+  mutate(UPN = str_remove(id1, "malignant_")) %>% 
+  select(-id1, -id2) %>% 
+  group_by(UPN) %>% 
+  summarize(tx_nCNV = n())
+
+gp3_so <- get_metadata(gp3_so) %>% 
+  select(cell, UPN) %>% 
+  left_join(hmm_pred, by = "UPN") %>% 
+  column_to_rownames("cell") %>% 
+  AddMetaData(gp3_so, .)
+
+plot_umap(gp3_so, c("methyl_nCNV", "tx_nCNV"))
+```
 
 ```{r}
 plot_umap(sos[[2]], c("UPN", "coarse_cell_type"))
