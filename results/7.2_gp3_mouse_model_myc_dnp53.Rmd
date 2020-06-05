@@ -548,6 +548,65 @@ save_plot(file.path(fig_dir, "umap_gp34_myc_dnp53_by_gp3_human_signatures.pdf"),
           ncol = 2)
 ```
 
+
+## Add our gene signature modules
+
+Instead of naming as a cluster include subpopulation labels
+```{r}
+human_markers <- read_tsv(file.path("markers", "GP3",  "harmony_subpopulation_markers_GP3.tsv"))
+
+# top n marker genes for modules and get mouse ortholog
+human_modules <- filter(human_markers, padj < 0.05) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC), .by_group = TRUE) %>% 
+  left_join(orthologs, by = c("feature" = "external_gene_name")) %>% 
+  na.omit() %>% 
+  group_by(group) %>% 
+  slice(1:200) %>% 
+  split(., .$group) %>% 
+  map(., ~pull(.x, mmusculus_homolog_associated_gene_name))
+
+# dont't name anything with "luster" or "ouvain", as will not
+# be recognized as float by ucsc cellbrowser...
+
+names(human_modules) <- paste0("gp3_signatures_subpop_",
+                               unique(human_markers$group))
+
+so <- AddModuleScore(so, 
+                     features = human_modules,
+                     ctrl = 200,
+                     name = "tmp_",
+                     seed = 42)
+
+new_cols <- paste0("tmp_", 1:length(unique(human_markers$group)))
+new_col_idx <- match(new_cols, colnames(so@meta.data))
+better_cols <- names(human_modules)
+
+# fix column names
+colnames(so@meta.data)[new_col_idx] <- better_cols
+
+names(better_cols) <- better_cols
+
+plt <- imap(better_cols, 
+    ~plot_umap(so, .x,
+               show_negative = TRUE, 
+               legend_title = str_remove(.x, "gp3_signatures_subpop_"),
+               cell_filter = colnames(so)[so$cell_types %in% c("malignant")])) %>% 
+  plot_grid(plotlist = ., 
+            nrow = 3,
+            ncol = 2)
+
+plt 
+
+save_plot(file.path(fig_dir, 
+                    "umap_dnp53_by_gp3_human_subpopulation_signatures.pdf"),
+          plt, 
+          base_asp = 1.4 ,
+          nrow = 3,
+          ncol = 2)
+```
+
+
 ## Calculate marker gene overlap
 
 ```{r}
@@ -562,7 +621,7 @@ filter(padj < 0.05) %>%
   split(., .$group) %>% 
   map(~pull(.x, external_gene_name))
 
-human_markers <- read_tsv(file.path("markers", "gp34",  "harmony_markers_gp34.tsv")) %>% 
+human_markers <- read_tsv(file.path("markers", "GP3",  "harmony_subpopulation_markers_GP3.tsv")) %>% 
   filter(padj < 0.05) %>% 
   group_by(group) %>% 
   arrange(padj, desc(logFC), .by_group = TRUE) %>% 
@@ -624,6 +683,257 @@ pdf(file.path(fig_dir, "Marker_overlap_dnp53_malignant_gp34.pdf"),
 dev.off()
 ```
 
+
+
+### Make graph based on correlation 
+
+Using 1-to-1 orthologs, find variable genes in each species, take intersection, then use these genes to compute correlation between each mouse and human cluster. Correlation values are then used as edges in a undirected bipartite graph (i.e. graph between mouse and human clusters, not mouse-to-mouse). Edges are filtered if the correlation is < 0.20 or adjusted p-value < 0.05. After constructing the graph a simple clustering is done for visualization. 
+
+Idea from:
+
+>>>
+Laughney, A. M. et al. Regenerative lineages and immune-mediated pruning in lung cancer metastasis. Nat. Med. 26, 259–269 (2020)
+>>>
+
+```{r}
+so_h <- qread(file.path("objects", "gp34", "gp3_only.qs"))
+so_sub <- qread(file.path(obj_dir,"gp3_myc_dnp53_sobj.qs")) %>% 
+  subset(., subset = cell_types %in% c("malignant"))
+
+```
+
+```{r}
+mats <- set_shared_orthologs(so_h, so_sub, orthologs)
+sos <- pmap(list(
+  mats, 
+  list(so_h, so_sub),
+  c("tumor_subpopulations_gp3",
+    "clusters")),
+  function(mat, so, cluster_col) {
+  tmp <- CreateSeuratObject(mat, meta.data = so@meta.data)
+  Idents(tmp) <- cluster_col  
+  avg_expr <- AverageExpression(tmp, return.seurat = FALSE)$RNA
+  
+  var_features <- VariableFeatures(FindVariableFeatures(tmp, nfeatures = 4000))
+  
+  list(avg_expr, var_features)
+})
+```
+
+```{r}
+shared_var_genes <- intersect(sos$mat1[[2]], sos$mat2[[2]])
+
+h_var_mat <- sos$mat1[[1]][shared_var_genes, ] %>% 
+  t() %>% 
+  scale(scale = FALSE, center = TRUE) %>% 
+  t()
+
+m_var_mat <-  sos$mat2[[1]][shared_var_genes, ] %>% 
+     t() %>% 
+  scale(scale = FALSE, center = TRUE) %>% 
+  t()
+
+res <- list()
+res$r <- matrix(nrow = ncol(m_var_mat),
+                ncol = ncol(h_var_mat))
+res$pvals <- res$r
+
+for(m in seq_along(colnames(m_var_mat))){
+  for(h in seq_along(colnames(h_var_mat))){
+    s <- cor.test(m_var_mat[, m], h_var_mat[, h], method = "pearson")
+    res$r[m, h] <- s$estimate
+    res$pvals[m,h] <- s$p.value
+  }
+}
+
+res$padj <- matrix(p.adjust(res$pvals),
+                   nrow = nrow(res$pvals), 
+                   ncol = ncol(res$pvals),
+                   byrow = FALSE)
+res <- map(res, ~{
+  rownames(.x) <- colnames(m_var_mat)
+  colnames(.x) <- colnames(h_var_mat)
+  .x
+})
+
+library(igraph)
+g <- graph.incidence(res$r, weighted = TRUE)
+g <- delete_edges(g, which(E(g)$weight <= 0.2 | as.vector(t(res$padj)) >= 0.05))
+wc <- cluster_walktrap(g)
+
+V(g)$color <- V(g)$type
+V(g)$shape <- ifelse(V(g)$type, "circle", "rectangle")
+#plot(g, edge.width=E(g)$weight, layout=layout.fruchterman.reingold)
+
+layout <-layout.fruchterman.reingold(g)
+
+new_cols <- ifelse(startsWith(V(g)$name, "GP3"), "white", "black")
+
+min_cor <- min(E(g)$weight)
+max_cor <- max(E(g)$weight)
+plot(wc, g,
+     col = new_cols,
+     mark.col = alpha(palette_OkabeIto[1:length(groups(wc))], 0.75),
+     mark.border = "black",
+     layout = layout,
+    edge.width= scales::rescale(E(g)$weight, c(1,5)), 
+     vertex.label = ifelse(startsWith(V(g)$name, "GP3"), 
+                           str_remove(V(g)$name, "GP3-"), 
+                           str_c("M", V(g)$name)),
+     vertex.label.family = "sans",
+    vertex.label.color = ifelse(startsWith(V(g)$name, "GP3"), "black", "white"))
+
+legend("bottomleft",
+       legend = c(paste("r =", formatC(min_cor, digits = 2)),
+                  paste("r =", formatC(max_cor, digits = 2))),
+       lwd = c(min(scales::rescale(E(g)$weight, c(1,5))),
+               max(scales::rescale(E(g)$weight, c(1,5)))))
+       
+       
+pdf(file.path(fig_dir, "dnp53_mouse_to_human_correlation_graph.pdf"))
+min_cor <- min(E(g)$weight)
+max_cor <- max(E(g)$weight)
+plot(wc, g,
+     col = new_cols,
+     mark.col = alpha(palette_OkabeIto[1:length(groups(wc))], 0.75),
+     mark.border = "black",
+     layout = layout,
+    edge.width= scales::rescale(E(g)$weight, c(1,5)), 
+     vertex.label = ifelse(startsWith(V(g)$name, "GP3"), 
+                           str_remove(V(g)$name, "GP3-"), 
+                           str_c("M", V(g)$name)),
+     vertex.label.family = "sans",
+    vertex.label.color = ifelse(startsWith(V(g)$name, "GP3"), "black", "white"))
+
+legend("bottomleft",
+       legend = c(paste("r =", formatC(min_cor, digits = 2)),
+                  paste("r =", formatC(max_cor, digits = 2))),
+       lwd = c(min(scales::rescale(E(g)$weight, c(1,5))),
+               max(scales::rescale(E(g)$weight, c(1,5)))))
+dev.off()
+```
+
+
+#### Combine both GP3 mouse models
+
+```{r}
+so_h <- qread(file.path("objects", "gp34", "gp3_only.qs"))
+so_sub <- qread(file.path(obj_dir,"gp3_myc_dnp53_sobj.qs")) %>% 
+  subset(., subset = cell_types %in% c("malignant"))
+
+```
+
+```{r}
+mats <- set_shared_orthologs(so_h, so_sub, orthologs)
+sos <- pmap(list(
+  mats, 
+  list(so_h, so_sub),
+  c("tumor_subpopulations_gp3",
+    "clusters")),
+  function(mat, so, cluster_col) {
+  tmp <- CreateSeuratObject(mat, meta.data = so@meta.data)
+  Idents(tmp) <- cluster_col  
+  avg_expr <- AverageExpression(tmp, return.seurat = FALSE)$RNA
+  
+  var_features <- VariableFeatures(FindVariableFeatures(tmp, nfeatures = 4000))
+  
+  list(avg_expr, var_features)
+})
+```
+
+```{r}
+shared_var_genes <- intersect(sos$mat1[[2]], sos$mat2[[2]])
+
+h_var_mat <- sos$mat1[[1]][shared_var_genes, ] %>% 
+  t() %>% 
+  scale(scale = FALSE, center = TRUE) %>% 
+  t()
+
+m_var_mat <-  sos$mat2[[1]][shared_var_genes, ] %>% 
+     t() %>% 
+  scale(scale = FALSE, center = TRUE) %>% 
+  t()
+
+res <- list()
+res$r <- matrix(nrow = ncol(m_var_mat),
+                ncol = ncol(h_var_mat))
+res$pvals <- res$r
+
+for(m in seq_along(colnames(m_var_mat))){
+  for(h in seq_along(colnames(h_var_mat))){
+    s <- cor.test(m_var_mat[, m], h_var_mat[, h], method = "pearson")
+    res$r[m, h] <- s$estimate
+    res$pvals[m,h] <- s$p.value
+  }
+}
+
+res$padj <- matrix(p.adjust(res$pvals),
+                   nrow = nrow(res$pvals), 
+                   ncol = ncol(res$pvals),
+                   byrow = FALSE)
+res <- map(res, ~{
+  rownames(.x) <- colnames(m_var_mat)
+  colnames(.x) <- colnames(h_var_mat)
+  .x
+})
+
+library(igraph)
+g <- graph.incidence(res$r, weighted = TRUE)
+g <- delete_edges(g, which(E(g)$weight <= 0.2 | as.vector(t(res$padj)) >= 0.05))
+wc <- cluster_walktrap(g)
+
+V(g)$color <- V(g)$type
+V(g)$shape <- ifelse(V(g)$type, "circle", "rectangle")
+#plot(g, edge.width=E(g)$weight, layout=layout.fruchterman.reingold)
+
+layout <-layout.fruchterman.reingold(g)
+
+new_cols <- ifelse(startsWith(V(g)$name, "GP3"), "white", "black")
+
+min_cor <- min(E(g)$weight)
+max_cor <- max(E(g)$weight)
+plot(wc, g,
+     col = new_cols,
+     mark.col = alpha(palette_OkabeIto[1:length(groups(wc))], 0.75),
+     mark.border = "black",
+     layout = layout,
+    edge.width= scales::rescale(E(g)$weight, c(1,5)), 
+     vertex.label = ifelse(startsWith(V(g)$name, "GP3"), 
+                           str_remove(V(g)$name, "GP3-"), 
+                           str_c("M", V(g)$name)),
+     vertex.label.family = "sans",
+    vertex.label.color = ifelse(startsWith(V(g)$name, "GP3"), "black", "white"))
+
+legend("bottomleft",
+       legend = c(paste("r =", formatC(min_cor, digits = 2)),
+                  paste("r =", formatC(max_cor, digits = 2))),
+       lwd = c(min(scales::rescale(E(g)$weight, c(1,5))),
+               max(scales::rescale(E(g)$weight, c(1,5)))))
+       
+       
+pdf(file.path(fig_dir, "dnp53_mouse_to_human_correlation_graph.pdf"))
+min_cor <- min(E(g)$weight)
+max_cor <- max(E(g)$weight)
+plot(wc, g,
+     col = new_cols,
+     mark.col = alpha(palette_OkabeIto[1:length(groups(wc))], 0.75),
+     mark.border = "black",
+     layout = layout,
+    edge.width= scales::rescale(E(g)$weight, c(1,5)), 
+     vertex.label = ifelse(startsWith(V(g)$name, "GP3"), 
+                           str_remove(V(g)$name, "GP3-"), 
+                           str_c("M", V(g)$name)),
+     vertex.label.family = "sans",
+    vertex.label.color = ifelse(startsWith(V(g)$name, "GP3"), "black", "white"))
+
+legend("bottomleft",
+       legend = c(paste("r =", formatC(min_cor, digits = 2)),
+                  paste("r =", formatC(max_cor, digits = 2))),
+       lwd = c(min(scales::rescale(E(g)$weight, c(1,5))),
+               max(scales::rescale(E(g)$weight, c(1,5)))))
+dev.off()
+```
+
 ### Write out metadata
 
 
@@ -639,8 +949,8 @@ write_tsv(mdata_out, outname)
 ## save object
 
 ```{r}
-qsave(so, file.path(obj_dir,"gp3_myc_dnp53_sobj.qs"))
-#so <- qread(file.path(obj_dir,"gp3_myc_dnp53_sobj.qs"))
+#qsave(so, file.path(obj_dir,"gp3_myc_dnp53_sobj.qs"))
+so <- qread(file.path(obj_dir,"gp3_myc_dnp53_sobj.qs"))
 ```
 
 # Integrate with human
@@ -1047,5 +1357,291 @@ mkrs
 
 ```{r}
 qsave(so, file.path(obj_dir,"gp3_myc_dnp53_sobj.qs"))
+```
+
+
+
+
+## Make graph with human GP3 including GFI model
+
+
+Using 1-to-1 orthologs, find variable genes in each species, take intersection, then use these genes to compute correlation between each mouse and human cluster. Correlation values are then used as edges in a undirected bipartite graph (i.e. graph between mouse and human clusters, not mouse-to-mouse). Edges are filtered if the correlation is < 0.20 or adjusted p-value < 0.05. After constructing the graph a simple clustering is done for visualization. 
+
+Idea from:
+
+>>>
+Laughney, A. M. et al. Regenerative lineages and immune-mediated pruning in lung cancer metastasis. Nat. Med. 26, 259–269 (2020)
+>>>
+
+```{r}
+so_h <- qread(file.path("objects", "gp34", "gp3_only.qs"))
+so_sub <- qread(file.path(obj_dir,"gp3_myc_dnp53_sobj.qs")) %>% 
+  subset(., subset = cell_types %in% c("malignant"))
+
+```
+
+```{r}
+mats <- set_shared_orthologs(so_h, so_sub, orthologs)
+sos <- pmap(list(
+  mats, 
+  list(so_h, so_sub),
+  c("tumor_subpopulations_gp3",
+    "clusters")),
+  function(mat, so, cluster_col) {
+  tmp <- CreateSeuratObject(mat, meta.data = so@meta.data)
+  Idents(tmp) <- cluster_col  
+  avg_expr <- AverageExpression(tmp, return.seurat = FALSE)$RNA
+  
+  var_features <- VariableFeatures(FindVariableFeatures(tmp, nfeatures = 4000))
+  
+  list(avg_expr, var_features)
+})
+```
+
+```{r}
+shared_var_genes <- intersect(sos$mat1[[2]], sos$mat2[[2]])
+
+h_var_mat <- sos$mat1[[1]][shared_var_genes, ] %>% 
+  t() %>% 
+  scale(scale = FALSE, center = TRUE) %>% 
+  t()
+
+m_var_mat <-  sos$mat2[[1]][shared_var_genes, ] %>% 
+     t() %>% 
+  scale(scale = FALSE, center = TRUE) %>% 
+  t()
+
+res <- list()
+res$r <- matrix(nrow = ncol(m_var_mat),
+                ncol = ncol(h_var_mat))
+res$pvals <- res$r
+
+for(m in seq_along(colnames(m_var_mat))){
+  for(h in seq_along(colnames(h_var_mat))){
+    s <- cor.test(m_var_mat[, m], h_var_mat[, h], method = "pearson")
+    res$r[m, h] <- s$estimate
+    res$pvals[m,h] <- s$p.value
+  }
+}
+
+res$padj <- matrix(p.adjust(res$pvals),
+                   nrow = nrow(res$pvals), 
+                   ncol = ncol(res$pvals),
+                   byrow = FALSE)
+res <- map(res, ~{
+  rownames(.x) <- colnames(m_var_mat)
+  colnames(.x) <- colnames(h_var_mat)
+  .x
+})
+
+library(igraph)
+g <- graph.incidence(res$r, weighted = TRUE)
+g <- delete_edges(g, which(E(g)$weight <= 0.2 | as.vector(t(res$padj)) >= 0.05))
+wc <- cluster_walktrap(g)
+
+V(g)$color <- V(g)$type
+V(g)$shape <- ifelse(V(g)$type, "circle", "rectangle")
+#plot(g, edge.width=E(g)$weight, layout=layout.fruchterman.reingold)
+
+layout <-layout.fruchterman.reingold(g)
+
+new_cols <- ifelse(startsWith(V(g)$name, "GP3"), "white", "black")
+
+min_cor <- min(E(g)$weight)
+max_cor <- max(E(g)$weight)
+plot(wc, g,
+     col = new_cols,
+     mark.col = alpha(palette_OkabeIto[1:length(groups(wc))], 0.75),
+     mark.border = "black",
+     layout = layout,
+    edge.width= scales::rescale(E(g)$weight, c(1,5)), 
+     vertex.label = ifelse(startsWith(V(g)$name, "GP3"), 
+                           str_remove(V(g)$name, "GP3-"), 
+                           str_c("M", V(g)$name)),
+     vertex.label.family = "sans",
+    vertex.label.color = ifelse(startsWith(V(g)$name, "GP3"), "black", "white"))
+
+legend("bottomleft",
+       legend = c(paste("r =", formatC(min_cor, digits = 2)),
+                  paste("r =", formatC(max_cor, digits = 2))),
+       lwd = c(min(scales::rescale(E(g)$weight, c(1,5))),
+               max(scales::rescale(E(g)$weight, c(1,5)))))
+       
+       
+pdf(file.path(fig_dir, "dnp53_mouse_to_human_correlation_graph.pdf"))
+min_cor <- min(E(g)$weight)
+max_cor <- max(E(g)$weight)
+plot(wc, g,
+     col = new_cols,
+     mark.col = alpha(palette_OkabeIto[1:length(groups(wc))], 0.75),
+     mark.border = "black",
+     layout = layout,
+    edge.width= scales::rescale(E(g)$weight, c(1,5)), 
+     vertex.label = ifelse(startsWith(V(g)$name, "GP3"), 
+                           str_remove(V(g)$name, "GP3-"), 
+                           str_c("M", V(g)$name)),
+     vertex.label.family = "sans",
+    vertex.label.color = ifelse(startsWith(V(g)$name, "GP3"), "black", "white"))
+
+legend("bottomleft",
+       legend = c(paste("r =", formatC(min_cor, digits = 2)),
+                  paste("r =", formatC(max_cor, digits = 2))),
+       lwd = c(min(scales::rescale(E(g)$weight, c(1,5))),
+               max(scales::rescale(E(g)$weight, c(1,5)))))
+dev.off()
+```
+
+
+#### Combine both GP3 mouse models
+
+```{r}
+so_h <- qread(file.path("objects", "gp34", "gp3_only.qs"))
+so_sub_p53 <- qread(file.path(obj_dir,"gp3_myc_dnp53_sobj.qs")) %>% 
+  subset(., subset = cell_types %in% c("malignant"))
+
+so_sub_gfi <- qread(file.path(obj_dir,"gp3_myc_gfi1_sobj.qs")) %>% 
+                      subset(., 
+                 subset = cell_types %in% c("malignant", "Neuroendocrine"))
+
+```
+
+```{r}
+mats_p53 <- set_shared_orthologs(so_h, so_sub_p53, orthologs)
+mats_gfi1 <- set_shared_orthologs(so_h, so_sub_gfi, orthologs)
+mats <- c(mats_p53, mats_gfi1[2])
+names(mats) <- c("mat1", "mat2", "mat3")
+  
+sos <- pmap(list(
+  mats, 
+  list(so_h, so_sub_p53, so_sub_gfi),
+  c("tumor_subpopulations_gp3",
+    "clusters",
+    "clusters")),
+  function(mat, so, cluster_col) {
+  tmp <- CreateSeuratObject(mat, meta.data = so@meta.data)
+  Idents(tmp) <- cluster_col  
+  avg_expr <- AverageExpression(tmp, return.seurat = FALSE)$RNA
+  
+  var_features <- VariableFeatures(FindVariableFeatures(tmp, nfeatures = 4000))
+  
+  list(avg_expr, var_features)
+})
+```
+
+```{r}
+shared_var_genes <- union(intersect(sos$mat1[[2]], sos$mat2[[2]]),
+                          intersect(sos$mat1[[2]], sos$mat3[[2]]))
+
+h_var_mat <- sos$mat1[[1]][shared_var_genes, ] %>% 
+  t() %>% 
+  scale(scale = FALSE, center = TRUE) %>% 
+  t()
+
+p53_var_mat <-  sos$mat2[[1]][shared_var_genes, ] %>% 
+     t() %>% 
+  scale(scale = FALSE, center = TRUE) %>% 
+  t()
+colnames(p53_var_mat) <- str_c("Dnp53-", colnames(p53_var_mat))
+gfi1_var_mat <-  sos$mat3[[1]][shared_var_genes, ] %>% 
+     t() %>% 
+  scale(scale = FALSE, center = TRUE) %>% 
+  t()
+colnames(gfi1_var_mat) <- str_c("Gfi1-", colnames(gfi1_var_mat))
+
+m_var_mat <- cbind(p53_var_mat, gfi1_var_mat)
+res <- list()
+res$r <- matrix(nrow = ncol(m_var_mat),
+                ncol = ncol(h_var_mat))
+res$pvals <- res$r
+
+for(m in seq_along(colnames(m_var_mat))){
+  for(h in seq_along(colnames(h_var_mat))){
+    s <- cor.test(m_var_mat[, m], h_var_mat[, h], method = "pearson")
+    res$r[m, h] <- s$estimate
+    res$pvals[m,h] <- s$p.value
+  }
+}
+
+res$padj <- matrix(p.adjust(res$pvals),
+                   nrow = nrow(res$pvals), 
+                   ncol = ncol(res$pvals),
+                   byrow = FALSE)
+res <- map(res, ~{
+  rownames(.x) <- colnames(m_var_mat)
+  colnames(.x) <- colnames(h_var_mat)
+  .x
+})
+
+library(igraph)
+g <- graph.incidence(res$r, weighted = TRUE)
+g <- delete_edges(g, which(E(g)$weight <= 0.2 | as.vector(t(res$padj)) >= 0.05))
+wc <- cluster_walktrap(g)
+
+V(g)$color <- V(g)$type
+V(g)$shape <- ifelse(V(g)$type, "circle", "rectangle")
+#plot(g, edge.width=E(g)$weight, layout=layout.fruchterman.reingold)
+
+layout <-layout.fruchterman.reingold(g)
+
+new_cols <- ifelse(startsWith(V(g)$name, "GP3"), 
+                   "white",
+                   ifelse(startsWith(V(g)$name, "Dnp53"),
+                          "black",
+                          "grey"))
+                   
+min_cor <- min(E(g)$weight)
+max_cor <- max(E(g)$weight)
+plot(wc, g,
+     col = new_cols,
+     mark.col = alpha(palette_OkabeIto[1:length(groups(wc))], 0.75),
+     mark.border = "black",
+     layout = layout,
+    edge.width= scales::rescale(E(g)$weight, c(1,5)), 
+     vertex.label = ifelse(startsWith(V(g)$name, "GP3"), 
+                           str_remove(V(g)$name, "GP3-"), 
+                           str_split(V(g)$name, "-", simplify = T) %>% .[, 2] %>% str_c("M", .)),
+     vertex.label.family = "sans",
+    vertex.label.color = ifelse(startsWith(V(g)$name, "GP3"), "black", "white"))
+
+legend("bottomleft",
+       legend = c(paste("r =", formatC(min_cor, digits = 2)),
+                  paste("r =", formatC(max_cor, digits = 2))),
+       lwd = c(min(scales::rescale(E(g)$weight, c(1,5))),
+               max(scales::rescale(E(g)$weight, c(1,5)))))
+       
+legend("bottomright",
+       legend = c("Human GP3 subpopulations",
+                  "Mouse DNp53 GP3 model",
+                  "Mouse Gfi1 GP3 model"),
+       pch = c(21, 22, 22),
+       pt.bg = c("white", "black", "grey"))
+
+pdf(file.path(fig_dir, "dnp53_mouse_to_human_correlation_graph.pdf"))
+min_cor <- min(E(g)$weight)
+max_cor <- max(E(g)$weight)
+plot(wc, g,
+     col = new_cols,
+     mark.col = alpha(palette_OkabeIto[1:length(groups(wc))], 0.75),
+     mark.border = "black",
+     layout = layout,
+    edge.width= scales::rescale(E(g)$weight, c(1,5)), 
+     vertex.label = ifelse(startsWith(V(g)$name, "GP3"), 
+                           str_remove(V(g)$name, "GP3-"), 
+                           str_c("M", V(g)$name)),
+     vertex.label.family = "sans",
+    vertex.label.color = ifelse(startsWith(V(g)$name, "GP3"), "black", "white"))
+
+legend("bottomleft",
+       legend = c(paste("r =", formatC(min_cor, digits = 2)),
+                  paste("r =", formatC(max_cor, digits = 2))),
+       lwd = c(min(scales::rescale(E(g)$weight, c(1,5))),
+               max(scales::rescale(E(g)$weight, c(1,5)))))
+
+legend("bottomright",
+       legend = c("Human GP3 subpopulations",
+                  "Mouse DNp53 GP3 model",
+                  "Mouse Gfi1 GP3 model"),
+       fill = c(""))
+dev.off()
 ```
 
