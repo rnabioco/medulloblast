@@ -261,15 +261,24 @@ dev.off()
 hmap
 ```
 
-
+## Correlate all subpopulations based on modules scores
 ```{r}
 so <- merge(sos[[1]], sos[2:3])
-```
 
-
-```{r}
-var_marker_lst <- all_mrkrs %>%
-  map(~group_by(.x, group) %>% slice(1:100)) %>% 
+dir_ids <- c("GP3", "shh", "GP4")
+all_markers <- map(file.path(
+  "markers",
+  dir_ids,
+  paste0("harmony_subpopulation_markers_", toupper(dir_ids), ".tsv")),
+  ~read_tsv(.x) %>% 
+    group_by(group) %>% 
+    arrange(padj, desc(logFC), .by_group = T) %>% 
+    ungroup()
+)
+  
+var_marker_lst <- all_markers %>%
+  map(~group_by(.x, group) %>% 
+        slice(1:200)) %>% 
   bind_rows() %>% 
   split(., .$group) %>% 
   map(~pull(.x, feature))
