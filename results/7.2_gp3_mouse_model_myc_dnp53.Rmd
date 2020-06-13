@@ -1616,7 +1616,7 @@ legend("bottomright",
        pch = c(21, 22, 22),
        pt.bg = c("white", "black", "grey"))
 
-pdf(file.path(fig_dir, "dnp53_mouse_to_human_correlation_graph.pdf"))
+pdf(file.path(fig_dir, "gfi1_and_dnp53_mouse_to_human_correlation_graph.pdf"))
 min_cor <- min(E(g)$weight)
 max_cor <- max(E(g)$weight)
 plot(wc, g,
@@ -1627,7 +1627,7 @@ plot(wc, g,
     edge.width= scales::rescale(E(g)$weight, c(1,5)), 
      vertex.label = ifelse(startsWith(V(g)$name, "GP3"), 
                            str_remove(V(g)$name, "GP3-"), 
-                           str_c("M", V(g)$name)),
+                           str_split(V(g)$name, "-", simplify = T) %>% .[, 2] %>% str_c("M", .)),
      vertex.label.family = "sans",
     vertex.label.color = ifelse(startsWith(V(g)$name, "GP3"), "black", "white"))
 
@@ -1635,13 +1635,16 @@ legend("bottomleft",
        legend = c(paste("r =", formatC(min_cor, digits = 2)),
                   paste("r =", formatC(max_cor, digits = 2))),
        lwd = c(min(scales::rescale(E(g)$weight, c(1,5))),
-               max(scales::rescale(E(g)$weight, c(1,5)))))
+               max(scales::rescale(E(g)$weight, c(1,5)))),
+       cex = 0.60)
 
 legend("bottomright",
        legend = c("Human GP3 subpopulations",
                   "Mouse DNp53 GP3 model",
                   "Mouse Gfi1 GP3 model"),
-       fill = c(""))
+       pch = c(21, 22, 22),
+       pt.bg = c("white", "black", "grey"),
+       cex = 0.60)
 dev.off()
 ```
 

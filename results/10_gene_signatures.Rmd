@@ -28,7 +28,8 @@ library(presto)
 library(openxlsx)
 library(gprofiler2)
 library(ggrepel)
-
+library(igraph)
+library(GeneOverlap)
 ```
 
 
@@ -308,8 +309,572 @@ hmap
 ```
 
 
+## Make graphs based on correlation 
 
-##
+```{r}
+so_gp3 <- qread(file.path("objects", "gp34", "gp3_only.qs"))
+so_gp4 <- qread(file.path("objects", "gp34", "gp4_only.qs"))
+so_shh <- qread(file.path("objects", "shh", "shh.qs")) 
+  
+
+gp4_to_keep <- colnames(so_gp4)[!str_detect(so_gp4$tumor_subpopulations_gp4, "X") ]
+so_gp4 <- subset(so_gp4, cells = gp4_to_keep)
+
+shh_to_keep <- colnames(so_shh)[so_shh$tumor_subpopulations_shh != "SHH-X1"]
+so_shh <- subset(so_shh, cells = shh_to_keep)
+
+sos <- list(
+  gp3 = so_gp3,
+  gp4 = so_gp4,
+  shh = so_shh
+)
+
+rm(so_gp3, so_gp4, so_shh)
+```
+
+```{r}
+avg_objs <- map2(
+  sos,
+  c("tumor_subpopulations_gp3",
+    "tumor_subpopulations_gp4",
+    "tumor_subpopulations_shh"),
+  function(x, cluster_col) {
+    Idents(x) <- cluster_col  
+    avg_expr <- AverageExpression(x, return.seurat = FALSE)$RNA
+    var_features <- VariableFeatures(FindVariableFeatures(x, nfeatures = 2000))
+    list(expr = avg_expr, var_genes = var_features)
+  })
+```
+
+```{r}
+var_genes <- map(avg_objs, ~.x$var_genes) %>% 
+  unlist() %>% 
+  unique()
+
+var_genes <- Reduce(intersect, map(avg_objs, ~.x$var_genes))
+
+avg_expr_mat <- map(avg_objs, ~.x$expr) %>% 
+  unname() %>% 
+  do.call(cbind, .)
+
+avg_expr_mat <- avg_expr_mat[var_genes, ]
+
+
+hmap <- Heatmap(cor(avg_expr_mat, method = "pearson"),
+        col = viridis::viridis(256),
+        name = "Correlation",
+        row_names_gp = gpar(fontsize = 7),
+        column_names_gp = gpar(fontsize = 7))
+
+pdf(file.path(fig_dir, "tumor_subpopulation_correlation_matrix.pdf"),
+    width = 9,
+    height = 7)
+draw(hmap)
+dev.off()
+```
+
+
+```{r}
+pairwise_comps <- list(
+  c("gp3", "gp4"),
+  c("shh", "gp3"),
+  c("shh", "gp4")
+)
+
+get_cor_values <- function(x, y, 
+                           gene_combine_function = intersect,
+                           cor_method = "spearman"){ 
+  shared_var_genes <- gene_combine_function(x$var_genes, y$var_genes)
+  
+  x_mat <- x$expr[shared_var_genes, ] 
+  
+  y_mat <-  y$expr[shared_var_genes, ] 
+  
+  res <- list()
+  res$r <- matrix(nrow = ncol(y_mat),
+                  ncol = ncol(x_mat))
+  res$pvals <- res$r
+  
+  for(m in seq_along(colnames(y_mat))){
+    for(h in seq_along(colnames(x_mat))){
+      s <- cor.test(y_mat[, m], x_mat[, h], method = cor_method)
+      res$r[m, h] <- s$estimate
+      res$pvals[m,h] <- s$p.value
+    }
+  }
+  
+  res$padj <- matrix(p.adjust(res$pvals),
+                     nrow = nrow(res$pvals), 
+                     ncol = ncol(res$pvals),
+                     byrow = FALSE)
+  res <- map(res, ~{
+    rownames(.x) <- colnames(y_mat)
+    colnames(.x) <- colnames(x_mat)
+    .x
+  })
+  
+  res
+}
+```
+
+
+### GP3 vs. GP4
+
+```{r}
+res <- get_cor_values(avg_objs[["gp3"]], avg_objs[["gp4"]])
+seed_val <- 20200613
+
+# weighted graph based on correlation
+g <- graph.incidence(res$r, weighted = TRUE)
+
+# prune edges with correlation < 0.8 similar to clustifyr (or non-sig)
+g <- delete_edges(g, which(E(g)$weight <= max(res$r) * 0.8 | as.vector(t(res$padj)) >= 0.05))
+
+# add some meta clusters
+set.seed(seed_val)
+wc <- cluster_walktrap(g)
+
+V(g)$color <- V(g)$type
+V(g)$shape <- ifelse(V(g)$type, "circle", "rectangle")
+
+# force directed layout
+set.seed(seed_val)
+layout <- layout.fruchterman.reingold(g)
+
+new_cols <- ifelse(startsWith(V(g)$name, "GP3"), "white", "black")
+
+min_cor <- min(E(g)$weight)
+max_cor <- max(E(g)$weight)
+plot(wc, g,
+     col = new_cols,
+     mark.col = alpha(palette_OkabeIto[1:length(groups(wc))], 0.75),
+     mark.border = "black",
+     layout = layout,
+    edge.width= scales::rescale(E(g)$weight, c(1,5)), 
+     vertex.label = str_replace(V(g)$name, "-", "\n"),
+     vertex.label.family = "sans",
+    vertex.label.color = ifelse(startsWith(V(g)$name, "GP3"), "black", "white"))
+
+legend("bottomleft",
+       legend = c(paste("r =", formatC(min_cor, digits = 2)),
+                  paste("r =", formatC(max_cor, digits = 2))),
+       lwd = c(min(scales::rescale(E(g)$weight, c(1,5))),
+               max(scales::rescale(E(g)$weight, c(1,5)))))
+       
+
+pdf(file.path(fig_dir,
+              "gp3_to_gp4_correlation_graph.pdf"),
+    height = 9, width = 9)
+plot(wc, g,
+     col = new_cols,
+     mark.col = alpha(palette_OkabeIto[1:length(groups(wc))], 0.75),
+     mark.border = "black",
+     layout = layout,
+    edge.width= scales::rescale(E(g)$weight, c(1,5)), 
+     vertex.label = str_replace(V(g)$name, "-", "\n"),
+     vertex.label.family = "sans",
+    vertex.label.color = ifelse(startsWith(V(g)$name, "GP3"), "black", "white"))
+
+legend("bottomleft",
+       legend = c(paste("r =", formatC(min_cor, digits = 2)),
+                  paste("r =", formatC(max_cor, digits = 2))),
+       lwd = c(min(scales::rescale(E(g)$weight, c(1,5))),
+               max(scales::rescale(E(g)$weight, c(1,5)))))
+       
+dev.off()
+```
+
+
+### GP3 vs. SHH
+
+```{r}
+res <- get_cor_values(avg_objs[["gp3"]], avg_objs[["shh"]])
+seed_val <- 20200613
+
+# weighted graph based on correlation
+g <- graph.incidence(res$r, weighted = TRUE)
+
+# prune edges with correlation < 0.8 similar to clustifyr (or non-sig)
+g <- delete_edges(g, which(E(g)$weight <= max(res$r) * 0.8 | as.vector(t(res$padj)) >= 0.05))
+
+# add some meta clusters
+set.seed(seed_val)
+wc <- cluster_walktrap(g)
+
+V(g)$color <- V(g)$type
+V(g)$shape <- ifelse(V(g)$type, "circle", "rectangle")
+
+# force directed layout
+set.seed(seed_val)
+layout <- layout.fruchterman.reingold(g)
+
+new_cols <- ifelse(startsWith(V(g)$name, "GP3"), "white", "black")
+
+min_cor <- min(E(g)$weight)
+max_cor <- max(E(g)$weight)
+plot(wc, g,
+     col = new_cols,
+     mark.col = alpha(palette_OkabeIto[1:length(groups(wc))], 0.75),
+     mark.border = "black",
+     layout = layout,
+    edge.width= scales::rescale(E(g)$weight, c(1,5)), 
+     vertex.label = str_replace(V(g)$name, "-", "\n"),
+     vertex.label.family = "sans",
+    vertex.label.color = ifelse(startsWith(V(g)$name, "GP3"), "black", "white"))
+
+legend("bottomleft",
+       legend = c(paste("r =", formatC(min_cor, digits = 2)),
+                  paste("r =", formatC(max_cor, digits = 2))),
+       lwd = c(min(scales::rescale(E(g)$weight, c(1,5))),
+               max(scales::rescale(E(g)$weight, c(1,5)))))
+       
+
+pdf(file.path(fig_dir,
+              "gp3_to_shh_correlation_graph.pdf"),
+    height = 9, width = 9)
+plot(wc, g,
+     col = new_cols,
+     mark.col = alpha(palette_OkabeIto[1:length(groups(wc))], 0.75),
+     mark.border = "black",
+     layout = layout,
+    edge.width= scales::rescale(E(g)$weight, c(1,5)), 
+     vertex.label = str_replace(V(g)$name, "-", "\n"),
+     vertex.label.family = "sans",
+    vertex.label.color = ifelse(startsWith(V(g)$name, "GP3"), "black", "white"))
+
+legend("bottomleft",
+       legend = c(paste("r =", formatC(min_cor, digits = 2)),
+                  paste("r =", formatC(max_cor, digits = 2))),
+       lwd = c(min(scales::rescale(E(g)$weight, c(1,5))),
+               max(scales::rescale(E(g)$weight, c(1,5)))))
+       
+dev.off()
+```
+
+
+
+```{r}
+library("GeneOverlap")
+
+mouse_markers <- read_tsv(file.path("markers", "mouse", "gp34", "myc_gfi1_malignant_cluster_markers.tsv")) %>% 
+filter(padj < 0.05) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC), .by_group = TRUE) %>% 
+  inner_join(orthologs, by = c("feature" = "mmusculus_homolog_associated_gene_name")) %>% 
+    slice(1:200) %>% 
+  split(., .$group) %>% 
+  map(~pull(.x, external_gene_name))
+
+human_markers <- read_tsv(file.path("markers", "GP3",  "harmony_subpopulation_markers_GP3.tsv")) %>% 
+  filter(padj < 0.05) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC), .by_group = TRUE) %>% 
+  semi_join(orthologs, by = c("feature" = "external_gene_name")) %>% 
+  slice(1:200) %>% 
+  split(., .$group) %>% 
+  map(~pull(.x, feature))
+
+
+gom_human_mouse <- newGOM(mouse_markers, 
+                       human_markers,
+                       genome.size = nrow(so_sub))
+
+# extract overlaps
+pvals  <- getMatrix(gom_human_mouse, c("pval")) 
+pvals <- apply(pvals, 2, function(x) p.adjust(x, n = length(pvals)))
+
+jaccard <- getMatrix(gom_human_mouse, "Jaccard")
+odds <- getMatrix(gom_human_mouse, c("odds.ratio"))
+
+library(ComplexHeatmap)
+# clip really low pvals to avoid take log10 of 0)
+clip_val <- 1e-300
+  
+pvals[pvals < clip_val] <- clip_val
+pvals <- -log10(pvals)
+
+Heatmap(pvals,
+        name = "-log10(pvalue)", 
+        col = viridis::viridis(256),
+        row_title = "Mouse model markers",
+        column_title = "Human Group 3 and 4 markers")
+
+h <- Heatmap(jaccard,
+        name = "Jaccard index", 
+        col = viridis::viridis(256),
+       row_title = "Myc + GFI1 model clusters",
+        column_title = "Human Group 3 and 4 clusters",
+        cell_fun = function(j, i, x, y, width, height, fill) {
+          bin <- findInterval(pvals[i, j], c(-log10(0.01), 20, 200))
+          txt <- c("*", "**", "***")[bin]
+          grid.text(txt, x, y, gp = gpar(fontsize = 10, col = "white"))
+})
+
+
+lgd_list <-  list(
+    Legend(labels = c("*** < 1e-200",
+                      "** < 1e-20",
+                      "* < 1e-2"), 
+           title = "Adj. p.val")
+)
+draw(h, heatmap_legend_list = lgd_list)
+
+
+pdf(file.path(fig_dir, "Marker_overlap_gfi1_malignant_gp34.pdf"),
+    width = 7,
+    height = 7)
+  draw(h, heatmap_legend_list = lgd_list)
+dev.off()
+```
+
+
+### GP4 vs. SHH
+
+```{r}
+res <- get_cor_values(avg_objs[["gp4"]], avg_objs[["shh"]])
+seed_val <- 20200613
+
+
+# weighted graph based on correlation
+g <- graph.incidence(res$r, weighted = TRUE)
+
+# prune edges with correlation < 0.8 similar to clustifyr (or non-sig)
+g <- delete_edges(g, which(E(g)$weight <= max(res$r) * 0.8 | as.vector(t(res$padj)) >= 0.05))
+
+# add some meta clusters
+set.seed(seed_val)
+wc <- cluster_walktrap(g)
+
+V(g)$color <- V(g)$type
+V(g)$shape <- ifelse(V(g)$type, "circle", "rectangle")
+
+# force directed layout
+set.seed(seed_val)
+layout <- layout.fruchterman.reingold(g)
+
+new_cols <- ifelse(startsWith(V(g)$name, "GP4"), "white", "black")
+
+min_cor <- min(E(g)$weight)
+max_cor <- max(E(g)$weight)
+plot(wc, g,
+     col = new_cols,
+     mark.col = alpha(palette_OkabeIto[1:length(groups(wc))], 0.75),
+     mark.border = "black",
+     layout = layout,
+    edge.width= scales::rescale(E(g)$weight, c(1,5)), 
+     vertex.label = str_replace(V(g)$name, "-", "\n"),
+     vertex.label.family = "sans",
+    vertex.label.color = ifelse(startsWith(V(g)$name, "GP4"), "black", "white"))
+
+legend("bottomleft",
+       legend = c(paste("r =", formatC(min_cor, digits = 2)),
+                  paste("r =", formatC(max_cor, digits = 2))),
+       lwd = c(min(scales::rescale(E(g)$weight, c(1,5))),
+               max(scales::rescale(E(g)$weight, c(1,5)))))
+       
+
+pdf(file.path(fig_dir,
+              "gp4_to_shh_correlation_graph.pdf"),
+    height = 9, width = 9)
+plot(wc, g,
+     col = new_cols,
+     mark.col = alpha(palette_OkabeIto[1:length(groups(wc))], 0.75),
+     mark.border = "black",
+     layout = layout,
+    edge.width= scales::rescale(E(g)$weight, c(1,5)), 
+     vertex.label = str_replace(V(g)$name, "-", "\n"),
+     vertex.label.family = "sans",
+    vertex.label.color = ifelse(startsWith(V(g)$name, "GP4"), "black", "white"))
+
+legend("bottomleft",
+       legend = c(paste("r =", formatC(min_cor, digits = 2)),
+                  paste("r =", formatC(max_cor, digits = 2))),
+       lwd = c(min(scales::rescale(E(g)$weight, c(1,5))),
+               max(scales::rescale(E(g)$weight, c(1,5)))))
+       
+dev.off()
+```
+
+
+## Marker overlap 
+
+### GP3 vs GP4 
+
+```{r}
+gp3_markers <- read_tsv(file.path("markers", "GP3", "harmony_subpopulation_markers_GP3.tsv")) %>% 
+  filter(padj < 0.05,
+         !str_detect(group, "X")) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC), .by_group = TRUE) %>% 
+  slice(1:200) %>% 
+  split(., .$group) %>% 
+  map(~pull(.x, feature))
+
+gp4_markers <- read_tsv(file.path("markers", "GP4",  "harmony_subpopulation_markers_GP4.tsv")) %>% 
+  filter(padj < 0.05,
+         !str_detect(group, "X")) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC), .by_group = TRUE) %>%
+  slice(1:200) %>% 
+  split(., .$group) %>% 
+  map(~pull(.x, feature))
+
+
+gom <- newGOM(gp3_markers, 
+              gp4_markers,
+              genome.size = nrow(sos$gp3))
+
+# extract overlaps
+pvals  <- getMatrix(gom, c("pval")) 
+pvals <- apply(pvals, 2, function(x) p.adjust(x, n = length(pvals)))
+
+jaccard <- getMatrix(gom, "Jaccard")
+odds <- getMatrix(gom, c("odds.ratio"))
+
+
+# clip really low pvals to avoid take log10 of 0)
+clip_val <- 1e-300
+  
+pvals[pvals < clip_val] <- clip_val
+pvals <- -log10(pvals)
+
+h <- Heatmap(jaccard,
+        name = "Jaccard index", 
+        col = viridis::viridis(256),
+       row_title = "Group 3 subpopulations",
+        column_title = "Group 4 subpopulations",
+        cell_fun = function(j, i, x, y, width, height, fill) {
+          bin <- findInterval(pvals[i, j], c(-log10(0.01), 20, 200))
+          txt <- c("*", "**", "***")[bin]
+          grid.text(txt, x, y, gp = gpar(fontsize = 10, col = "white"))
+})
+
+
+lgd_list <-  list(
+    Legend(labels = c("*** < 1e-200",
+                      "** < 1e-20",
+                      "* < 1e-2"), 
+           title = "Adj. p.val")
+)
+draw(h, heatmap_legend_list = lgd_list)
+
+
+pdf(file.path(fig_dir, "Marker_overlap_gp3_gp4.pdf"),
+    width = 7,
+    height = 7)
+  draw(h, heatmap_legend_list = lgd_list)
+dev.off()
+```
+
+### GP3 vs SHH 
+
+```{r}
+shh_markers <- read_tsv(file.path("markers", "SHH",  "harmony_subpopulation_markers_SHH.tsv")) %>% 
+  filter(padj < 0.05,
+         !str_detect(group, "X")) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC), .by_group = TRUE) %>%
+  slice(1:200) %>% 
+  split(., .$group) %>% 
+  map(~pull(.x, feature))
+
+
+gom <- newGOM(gp3_markers, 
+              shh_markers,
+              genome.size = nrow(sos$gp3))
+
+# extract overlaps
+pvals  <- getMatrix(gom, c("pval")) 
+pvals <- apply(pvals, 2, function(x) p.adjust(x, n = length(pvals)))
+
+jaccard <- getMatrix(gom, "Jaccard")
+odds <- getMatrix(gom, c("odds.ratio"))
+
+
+# clip really low pvals to avoid take log10 of 0)
+clip_val <- 1e-300
+  
+pvals[pvals < clip_val] <- clip_val
+pvals <- -log10(pvals)
+
+h <- Heatmap(jaccard,
+        name = "Jaccard index", 
+        col = viridis::viridis(256),
+       row_title = "Group 3 subpopulations",
+        column_title = "SHH subpopulations",
+        cell_fun = function(j, i, x, y, width, height, fill) {
+          bin <- findInterval(pvals[i, j], c(-log10(0.01), 20, 200))
+          txt <- c("*", "**", "***")[bin]
+          grid.text(txt, x, y, gp = gpar(fontsize = 10, col = "white"))
+})
+
+
+lgd_list <-  list(
+    Legend(labels = c("*** < 1e-200",
+                      "** < 1e-20",
+                      "* < 1e-2"), 
+           title = "Adj. p.val")
+)
+draw(h, heatmap_legend_list = lgd_list)
+
+
+pdf(file.path(fig_dir, "Marker_overlap_gp3_shh.pdf"),
+    width = 7,
+    height = 7)
+  draw(h, heatmap_legend_list = lgd_list)
+dev.off()
+```
+
+### GP3 vs GP4 
+
+```{r}
+gom <- newGOM(gp4_markers, 
+              shh_markers,
+              genome.size = nrow(sos$gp4))
+
+# extract overlaps
+pvals  <- getMatrix(gom, c("pval")) 
+pvals <- apply(pvals, 2, function(x) p.adjust(x, n = length(pvals)))
+
+jaccard <- getMatrix(gom, "Jaccard")
+odds <- getMatrix(gom, c("odds.ratio"))
+
+
+# clip really low pvals to avoid take log10 of 0)
+clip_val <- 1e-300
+  
+pvals[pvals < clip_val] <- clip_val
+pvals <- -log10(pvals)
+
+h <- Heatmap(jaccard,
+        name = "Jaccard index", 
+        col = viridis::viridis(256),
+       row_title = "Group 4 subpopulations",
+        column_title = "SHH subpopulations",
+        cell_fun = function(j, i, x, y, width, height, fill) {
+          bin <- findInterval(pvals[i, j], c(-log10(0.01), 20, 200))
+          txt <- c("*", "**", "***")[bin]
+          grid.text(txt, x, y, gp = gpar(fontsize = 10, col = "white"))
+})
+
+
+lgd_list <-  list(
+    Legend(labels = c("*** < 1e-200",
+                      "** < 1e-20",
+                      "* < 1e-2"), 
+           title = "Adj. p.val")
+)
+draw(h, heatmap_legend_list = lgd_list)
+
+
+pdf(file.path(fig_dir, "Marker_overlap_gp4_shh.pdf"),
+    width = 7,
+    height = 7)
+  draw(h, heatmap_legend_list = lgd_list)
+dev.off()
+```
+
+## Other analyses
 
 ```{r, eval = FALSE}
 all_tumor_mkrs <- wilcoxauc(so, "tumor_cell_type")
