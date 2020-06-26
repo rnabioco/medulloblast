@@ -376,8 +376,26 @@ iwalk(plts,
 walk2(sos, so_obj_fns, ~qsave(.x, .y))
 ```
 
+
+also add to all neoplastic
+
+```{r}
+so <- qread( file.path("objects", "preprocess", "all_neoplastic.qs"))
+
+so <- get_metadata(so) %>% 
+    select(cell, UPN) %>% 
+    left_join(methyl_cnvs, by = "UPN") %>% 
+    column_to_rownames("cell") %>% 
+    AddMetaData(so, .)
+ 
+plot_umap(so, "methyl_nCNV")
+ 
+qsave(so, file.path("objects", "preprocess", "all_neoplastic.qs"))
+```
+
 # run once inferCNV finishes
-                    
+      
+```{r}              
 # hmm_pred <- read_tsv("inferCNV_v2/gp4/gp4/HMM_CNV_predictions.HMMi6.hmm_mode-samples.Pnorm_0.5.pred_cnv_regions.dat") %>% 
 #   separate(cell_group_name, c("id1", "id2"), sep = "\\.") %>% 
 #   mutate(UPN = str_remove(id1, "malignant_")) %>% 

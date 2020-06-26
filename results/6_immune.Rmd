@@ -569,7 +569,7 @@ expr_mat %>%
 ## save object
 
 
-```{r }
+```{r eval = FALSE}
 qsave(so, file.path(obj_dir, "immune_so.qs"))
 ```
 
@@ -786,5 +786,61 @@ go_res[["result"]] %>%
   split(., .$source) %>% 
   openxlsx::write.xlsx(., file.path(tbls_dir, "monocyte_shh_gp4_goterms.xlsx"))
 ```
+
+## Add better cell type labels
+
+```{r}
+
+new_ids <- c(
+  "6" = "Non-activated microglia (NA-M)",
+  "1" = "Complement myeloid (Complement-M)",
+  "3" = "M2-activated myeloid  (M2-M)",
+  "2" = "Chemokine myeloid (Chemokine-M)",
+  "4" = "Dendritic cell-like myeloid (DC-M)",
+  "5" = "Neutrophil (Nt)",
+  "7" = "NK cell (NK)",
+  "0" = "T cell (T)",
+  "8" = "B cell (B)",
+  "10" = "Treg cell (Treg)",
+  "9" = "Proliferative (Prolif.)"
+)
+
+new_ids <- factor(new_ids, levels = new_ids)
+
+so$publication_cell_types <- new_ids[as.character(so$fine_immune_clusters)]
+
+p <- plot_umap(so, "publication_cell_types", legend_title = "", sorted = "random")
+
+
+embed_med_dat <- p$data %>%
+  group_by(publication_cell_types) %>%
+  mutate(median_x = median(`UMAP_1`),
+         median_y = median(`UMAP_2`)) %>%
+  mutate(new_id = ifelse(scbp:::closest_to_point(data.frame(.data[["UMAP_1"]],
+                                                     .data[["UMAP_2"]]),
+                                          c(unique(median_x),
+                                            unique(median_y))),
+                         as.character(str_match(publication_cell_types,
+                                                "\\((.+)\\)") %>% .[, 2]),
+                         "")
+  )
+
+# use same colors as each feature
+p <- p + ggrepel::geom_text_repel(data = embed_med_dat,
+                           aes_string(x = "median_x",
+                                      y = "median_y",
+                                      label = "new_id"),
+                           size = 3,
+                           segment.colour = "black",
+                           force = 0.4,
+                           nudge_y = 1,
+                           seed = 2)
+p
+
+save_plot(file.path(fig_dir, "publication_cell_type_labels.pdf"),
+          p,
+          base_asp = 2.0)
+```
+
 
 

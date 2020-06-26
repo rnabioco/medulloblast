@@ -37,6 +37,7 @@ all_data_fig_dir <- file.path(fig_dir, "all_data")
 dir.create(all_data_fig_dir, showWarnings = FALSE)
 
 so <- qread(file.path(obj_dir, "preprocess", "so.qs"), nthreads = 4)
+so$subgroup_v2 <- ifelse(so$subgroup == "GP3/4", "GP3", so$subgroup)
 ```
 
 
@@ -45,15 +46,13 @@ so <- qread(file.path(obj_dir, "preprocess", "so.qs"), nthreads = 4)
 ### Subgroup
 
 ```{r}
-p <- plot_umap(so, "subgroup", .cols = palette_OkabeIto) 
-
 n_cells <- ncol(so) %>% scales::comma() %>% str_c(., " cells")
-p <- plot_umap(so, "subgroup", 
+p <- plot_umap(so, "subgroup_v2", 
           .col = palette_OkabeIto, 
           label_text = TRUE,
           legend_title = "",
           label_col = "black",
-          sorted = "random") +
+          sorted = "random", label_repulsion = 0) +
   annotate(x = 17,
            y = -18, 
            geom = "text",
@@ -78,6 +77,58 @@ save_plot(file.path(all_data_fig_dir, "umap_by_UPN.pdf"),
 
 p
 ```
+
+### UPN + cell type + subgroup
+
+Color by UPN, annotate with text cell type or subgroup
+
+```{r}
+plt_text <- get_metadata(so) %>% 
+  select(coarse_cell_type, subgroup_v2, starts_with('UMAP')) %>% 
+  mutate(txt = ifelse(coarse_cell_type == "malignant",
+                      subgroup_v2,
+                      coarse_cell_type),
+         txt = case_when(
+           txt == "lymphocytes" ~ "lymph",
+           txt == "macrophage_monocytes" ~ "myel",
+           txt == "oligodendrocytes_astrocytes_other" ~ "oligo/astro",
+           TRUE ~ txt 
+         )) %>% 
+  group_by(txt) %>% 
+  mutate(txt_label = ifelse(
+    scbp:::closest_to_point(data.frame(.data[["UMAP_1"]],
+                                .data[["UMAP_2"]]),
+                               c(median(UMAP_1),
+                                 median(UMAP_2))),
+    txt,
+    ""
+  )) 
+
+p <- plot_umap(so, "UPN", sorted = "random", legend_title = "") + 
+  ggrepel::geom_text_repel(data = plt_text,
+                           min.segment.length = Inf, 
+                           force = 0.2, 
+                           point.padding = unit(0.5, "line"),
+                           aes(label = txt_label),
+                           seed = 1) + 
+  guides(color = guide_legend(ncol = 1, override.aes = list(size = 1))) +
+  annotate(x = -15,
+           y = -18, 
+           size = 3,
+           geom = "text",
+           label = n_cells) +
+  theme(legend.text = element_text(size = 8),
+        legend.key.size = unit(0.5, 'line'))
+
+
+save_plot(file.path(all_data_fig_dir, "umap_by_UPN_label_subgroup.pdf"),
+          p,
+          base_asp = 1.4)
+p
+# for some reason the plot printed by rstudio is different than the saved plot
+# unable to fix with messing around with seeds, save_plot, ggsave, or pdf...
+```
+
 
 ### coarse clusters
 
@@ -148,20 +199,59 @@ run on server per subgroup. Consider replotting heatmaps with better visualizati
 ```{r}
 so <- qread(file.path(obj_dir, "preprocess", "all_neoplastic.qs"))
 
+so$subgroup_v2 <- ifelse(so$subgroup == "GP3/4", "GP3", so$subgroup)
+# drop excluded subpopulations
+
+so$tmp_subpopulation <- ifelse(is.na(so$tumor_subpopulation), "WNT", so$tumor_subpopulation)
+to_keep <- colnames(so)[!str_detect(so$tmp_subpopulation, "X")]
+
+so <- subset(so, cells = to_keep)
+
 all_neo_fig_dir <- file.path(fig_dir, "all_neoplasic")
 dir.create(all_neo_fig_dir, showWarnings = FALSE)
 ```
 
 ```{r}
 n_cells <- ncol(so) %>% scales::comma() %>% str_c(., " cells")
-p <- plot_umap(so, "subgroup", .cols = palette_OkabeIto,
+p <- plot_umap(so, "subgroup_v2", .cols = palette_OkabeIto,
                legend_title = "") + 
-   annotate(x = 18,
-           y = -18, 
+   annotate(x = -12,
+           y = -20,
+           size = 3,
            geom = "text",
            label = n_cells)
 p
 save_plot(file.path(all_neo_fig_dir, "umap_neoplastic_by_subgroup.pdf"),
+          p, 
+          base_asp = 1.2)
+
+p234 <- plot_umap(so, 
+               c("NRL", "IMPG2", "tmp_subpopulation"))
+
+p234[[3]] <- p234[[3]] +
+    guides(color = guide_legend(ncol = 1, override.aes = list(size = 1))) +
+  theme(legend.text = element_text(size = 8),
+        legend.title = element_blank(),
+        legend.key.size = unit(0.5, 'line'))
+
+p <-  p +
+    guides(color = guide_legend(ncol = 1, override.aes = list(size = 1))) +
+  theme(legend.text = element_text(size = 8),
+        legend.title = element_blank(),
+        legend.key.size = unit(0.5, 'line'))
+
+p <- append(list(p), p234)
+p <- plot_grid(plotlist = p, nrow = 1, ncol = 4)
+save_plot(file.path(all_neo_fig_dir, "umap_subpopulations_and_photoreceptor_markers.pdf"),
+          p, 
+          nrow = 1,
+          ncol = 4,
+          base_asp = 1.2)
+
+p <- plot_umap(so, "methyl_nCNV",
+               legend_title = "") 
+p
+save_plot(file.path(all_neo_fig_dir, "umap_neoplastic_by_cnvs.pdf"),
           p, 
           base_asp = 1.2)
 
@@ -267,6 +357,92 @@ save_plot(file.path(shh_fig_dir, "umap_shh_by_subtype.pdf"),
           base_asp = 1.5)
 
 ```
+
+### overview plot
+
+```{r}
+# drop contamination populations
+to_keep <- colnames(so)[!str_detect(so$tumor_subpopulations_shh, "X")]
+so_sub <- subset(so, cells = to_keep)
+```
+
+```{r}
+text_to_show <- tribble(
+  ~tumor_subpopulations_shh, ~sub_pop_long, ~go, ~tf, ~genes,
+  "SHH-A1", "SHH-A mitotic G2M", "GO: G2M and S phase", "TF: MYBL2", "",
+  "SHH-A2", "SHH-A mitotic S", "GO: G2M and S phase", "TF: E2Fs", "",
+  "SHH-B1", "SHH-B progenitor 1", "GO: Regulation of neuron\ndifferentiation/Translation", "TF: ATOH1,ZEB1,HES6", "Genes: ATOH1,SFRP1,\nSOX2,SOX9,Ribosomal",
+  "SHH-B2", "SHH-B progenitor 2", "GO: Translation", "TF: ELK1,THAP11,MAX", "Genes: Ribosomal",
+  "SHH-C1", "SHH-C differentiated 1", "GO: RNA processing/axon-dendritic\ntransport", "TF: POU2F2,KMT2A", "Genes: GRIA2,LUC7L3,DST",
+  "SHH-C2", "SHH-C differentiated 2", "GO: Axon development", "TF: SOX4,NEUROD1", "Genes: STMN2/4",
+)
+
+find_max_with_limits <- function(x, q = c(0.1, 0.9)){
+  lims <- quantile(x, q)
+  vals <- x[x > lims[1] & x < lims[2]]
+  vals[abs(vals) == max(abs(vals))]
+}
+
+# plt_dat <- get_metadata(so) %>% 
+#   select(UMAPHarmony_1, UMAPHarmony_2, tumor_subpopulations_gp3) %>% 
+#     left_join(text_to_show, by = "tumor_subpopulations_gp3") %>% 
+#   mutate(txt = str_c(sub_pop_long,
+#                      go,
+#                      tf,
+#                      genes,
+#                      sep = "\n")) %>% 
+#   group_by(tumor_subpopulations_gp3) %>%
+#   sample_n(100) %>% 
+#   mutate(txt_label = ifelse(
+#     scbp:::closest_to_point(data.frame(.data[["UMAPHarmony_1"]],
+#                                 .data[["UMAPHarmony_2"]]),
+#                                c(find_max_with_limits(UMAPHarmony_1),
+#                                  find_max_with_limits(UMAPHarmony_2))),
+#     txt,
+#     ""
+#   )) %>% 
+#   ungroup()
+# 
+plt_dat <- get_metadata(so_sub) %>%
+  select(`UMAP_1.1`, `UMAP_2.1`, tumor_subpopulations_shh) %>%
+    left_join(text_to_show, by = "tumor_subpopulations_shh") %>%
+  mutate(txt_label = str_c(sub_pop_long,
+                     go,
+                     tf,
+                     genes,
+                     sep = "\n")) %>%
+  group_by(tumor_subpopulations_shh, txt_label) %>%
+  summarize(UMAPHarmony_1 = find_max_with_limits(`UMAP_1.1`),
+            UMAPHarmony_2 = find_max_with_limits(`UMAP_2.1`))
+
+lval <- 8
+p <- plot_harmony(so_sub, "tumor_subpopulations_shh") +
+  theme(legend.position = "none") + 
+ 
+  ggrepel::geom_label_repel(data = plt_dat,
+                            aes(x = UMAPHarmony_1,
+                                y = UMAPHarmony_2,
+                                label = txt_label),
+                            size = 3, 
+                            box.padding =0.1,
+                           force = 0.05, 
+                           max.overlaps = 2,
+                           max.time = 2.0,
+                           xlim = c(-lval - 1.5, lval - 1.5),
+                           ylim = c(-lval, lval),
+                           hjust = 0,
+                        fill = alpha("white", 0.5),
+                        seed = 42,
+                           label.size = 0.5, 
+                        direction = "both") +
+  coord_cartesian(clip = "off") 
+
+save_plot(file.path(shh_fig_dir, "umap_shh_harmony_overview.pdf"),
+          p, 
+          base_height = 6,
+          base_asp = 1.2)
+```
+
 
 ### harmony cluster markers
 
@@ -524,6 +700,85 @@ save_plot(file.path(gp3_fig_dir, "umap_gp3_by_tumor_cell_type.pdf"),
           base_asp = 1.5)
 ```
 
+
+### overview plot
+
+```{r}
+text_to_show <- tribble(
+  ~tumor_subpopulations_gp3, ~sub_pop_long, ~go, ~tf, ~genes,
+  "GP3-A", "Gp3-A mitotic", "GO: G2M and S phase", "TF: MYBL2", "",
+  "GP3-B1", "Gp3-B progenitor 1", "GO: Translation/Oxidative Phosphorylation", "TF: HMGA1, MYC, MAX", "Genes: Ribosomal",
+  "GP3-B2", "Gp3-B progenitor 2", "GO: Translation/Oxidative Phosphorylation", "TF: HLX, ATF4, MYC", "Genes: Ribosomal, MYC",
+  "GP3-C1", "Gp3-C differentiated 1", "GO: RNA processing/axon-dendritic\ntransport", "TF: ARNT", "Genes: LUC7L3,DST",
+  "GP3-C2", "Gp3-C differentiated 2", "GO: Photoreceptor", "TF: SHOX2,CRX", "Genes: NRL, IMPG2",
+)
+
+find_max_with_limits <- function(x, q = c(0.1, 0.9)){
+  lims <- quantile(x, q)
+  vals <- x[x > lims[1] & x < lims[2]]
+  vals[abs(vals) == max(abs(vals))]
+}
+
+# plt_dat <- get_metadata(so) %>% 
+#   select(UMAPHarmony_1, UMAPHarmony_2, tumor_subpopulations_gp3) %>% 
+#     left_join(text_to_show, by = "tumor_subpopulations_gp3") %>% 
+#   mutate(txt = str_c(sub_pop_long,
+#                      go,
+#                      tf,
+#                      genes,
+#                      sep = "\n")) %>% 
+#   group_by(tumor_subpopulations_gp3) %>%
+#   sample_n(100) %>% 
+#   mutate(txt_label = ifelse(
+#     scbp:::closest_to_point(data.frame(.data[["UMAPHarmony_1"]],
+#                                 .data[["UMAPHarmony_2"]]),
+#                                c(find_max_with_limits(UMAPHarmony_1),
+#                                  find_max_with_limits(UMAPHarmony_2))),
+#     txt,
+#     ""
+#   )) %>% 
+#   ungroup()
+# 
+plt_dat <- get_metadata(so) %>%
+  select(UMAPHarmony_1, UMAPHarmony_2, tumor_subpopulations_gp3) %>%
+    left_join(text_to_show, by = "tumor_subpopulations_gp3") %>%
+  mutate(txt_label = str_c(sub_pop_long,
+                     go,
+                     tf,
+                     genes,
+                     sep = "\n")) %>%
+  group_by(tumor_subpopulations_gp3, txt_label) %>%
+  summarize(UMAPHarmony_1 = find_max_with_limits(UMAPHarmony_1),
+            UMAPHarmony_2 = find_max_with_limits(UMAPHarmony_2))
+
+lval <- 8.75
+p <- plot_harmony(so, "tumor_subpopulations_gp3") +
+  theme(legend.position = "none") + 
+ 
+  ggrepel::geom_label_repel(data = plt_dat,
+                            aes(x = UMAPHarmony_1,
+                                y = UMAPHarmony_2,
+                                label = txt_label),
+                            size = 3, 
+                            box.padding =0.1,
+                           force = 0.02, 
+                           max.overlaps = 1,
+                           max.time = 2.0,
+                           xlim = c(-lval, lval),
+                           ylim = c(-lval, lval),
+                           hjust = 0,
+                        fill = alpha("white", 0.5),
+                        seed = 42,
+                           label.size = 0.5, 
+                        direction = "both") +
+  coord_cartesian(clip = "off") 
+
+save_plot(file.path(gp3_fig_dir, "umap_gp3_harmony_overview.pdf"),
+          p, 
+          base_height = 6,
+          base_asp = 1.2)
+```
+
 ### harmony cluster markers
 
 ```{r fig.height = 6}
@@ -762,6 +1017,66 @@ p <- plot_harmony(so,
 save_plot(file.path(gp4_fig_dir, "umap_gp4_by_tumor_cell_type.pdf"),
           p, 
           base_asp = 1.5)
+```
+
+
+### overview plot
+
+```{r}
+# drop contamination populations
+to_keep <- colnames(so)[!str_detect(so$tumor_subpopulations_gp4, "X")]
+so_sub <- subset(so, cells = to_keep)
+```
+
+```{r}
+text_to_show <- tribble(
+  ~tumor_subpopulations_gp4, ~sub_pop_long, ~go, ~tf, ~genes,
+  "GP4-A1", "Gp4-A mitotic G2M", "GO: G2M", "TF: FOXM1, MYBL2", "",
+  "GP4-A2", "Gp4-A mitotic S", "GO: S phase", "TF: ZNF492, E2Fs", "",
+  "GP4-B1", "Gp4-B progenitor 1", "GO: Translation/Oxidative Phosphorylation", "TF: BARHL1,NEURDOD2,SOX4,\nJUNB,JUND", "Genes: Ribosomal",
+  "GP4-B2", "Gp4-B progenitor 2", "GO: Translation", "TF: HEY, TEAD2 ELK1", "Genes: STMN2, Ribosomal",
+  "GP4-C1", "Gp4-C differentiated 1", "GO: RNA processing/axon-dendritic\ntransport", "TF: ONECUT2,LHX4", "Genes: GRIA2,LUC7L3,DST",
+  "GP4-C2", "Gp4-C differentiated 2", "GO: Photoreceptor", "TF: MEIS1,CRX", "Genes: NRL, IMPG2",
+)
+
+plt_dat <- get_metadata(so_sub) %>%
+  select(`UMAP_1.1`, `UMAP_2.1`, tumor_subpopulations_gp4) %>%
+    left_join(text_to_show, by = "tumor_subpopulations_gp4") %>%
+  mutate(txt_label = str_c(sub_pop_long,
+                     go,
+                     tf,
+                     genes,
+                     sep = "\n")) %>%
+  group_by(tumor_subpopulations_gp4, txt_label) %>%
+  summarize(UMAPHarmony_1 = find_max_with_limits(`UMAP_1.1`),
+            UMAPHarmony_2 = find_max_with_limits(`UMAP_2.1`))
+
+lval <- 10
+p <- plot_harmony(so_sub, "tumor_subpopulations_gp4") +
+  theme(legend.position = "none") + 
+
+  ggrepel::geom_label_repel(data = plt_dat,
+                            aes(x = UMAPHarmony_1,
+                                y = UMAPHarmony_2,
+                                label = txt_label),
+                            size = 3, 
+                            box.padding =0.1,
+                           force = 0.02, 
+                           max.overlaps = 2,
+                           max.time = 2.0,
+                           xlim = c(-lval, lval),
+                           ylim = c(-lval, lval),
+                           hjust = 0,
+                        fill = alpha("white", 0.5),
+                        seed = 42,
+                           label.size = 0.5, 
+                        direction = "both") +
+  coord_cartesian(clip = "off") 
+
+save_plot(file.path(gp4_fig_dir, "umap_gp4_harmony_overview.pdf"),
+          p, 
+          base_height = 6,
+          base_asp = 1.2)
 ```
 
 ### harmony cluster markers
