@@ -383,26 +383,7 @@ find_max_with_limits <- function(x, q = c(0.1, 0.9)){
   vals[abs(vals) == max(abs(vals))]
 }
 
-# plt_dat <- get_metadata(so) %>% 
-#   select(UMAPHarmony_1, UMAPHarmony_2, tumor_subpopulations_gp3) %>% 
-#     left_join(text_to_show, by = "tumor_subpopulations_gp3") %>% 
-#   mutate(txt = str_c(sub_pop_long,
-#                      go,
-#                      tf,
-#                      genes,
-#                      sep = "\n")) %>% 
-#   group_by(tumor_subpopulations_gp3) %>%
-#   sample_n(100) %>% 
-#   mutate(txt_label = ifelse(
-#     scbp:::closest_to_point(data.frame(.data[["UMAPHarmony_1"]],
-#                                 .data[["UMAPHarmony_2"]]),
-#                                c(find_max_with_limits(UMAPHarmony_1),
-#                                  find_max_with_limits(UMAPHarmony_2))),
-#     txt,
-#     ""
-#   )) %>% 
-#   ungroup()
-# 
+
 plt_dat <- get_metadata(so_sub) %>%
   select(`UMAP_1.1`, `UMAP_2.1`, tumor_subpopulations_shh) %>%
     left_join(text_to_show, by = "tumor_subpopulations_shh") %>%
@@ -443,6 +424,22 @@ save_plot(file.path(shh_fig_dir, "umap_shh_harmony_overview.pdf"),
           base_asp = 1.2)
 ```
 
+```{r}
+p <- plot_harmony(so_sub,
+                  "tumor_subpopulations_shh",
+                  pt_size = 0.2,
+                  label_text = TRUE,
+                  label_color = "black",
+                  ggrepel_opts = list(size = 8, force = 0.2)) +
+  theme(legend.position = "none")
+
+p
+
+save_plot(file.path(shh_fig_dir, "umap_shh_harmony_overview_simple.pdf"),
+          p, 
+          base_height = 6,
+          base_asp = 1.2)
+```
 
 ### harmony cluster markers
 
@@ -779,6 +776,25 @@ save_plot(file.path(gp3_fig_dir, "umap_gp3_harmony_overview.pdf"),
           base_asp = 1.2)
 ```
 
+```{r}
+p <- plot_harmony(so,
+                  "tumor_subpopulations_gp3",
+                  pt_size = 0.2,
+                  label_text = TRUE,
+                  label_color = "black",
+                  ggrepel_opts = list(size = 8, force = 0)) +
+  labs(x = "UMAP 1",
+       y = "UMAP 2") + 
+  theme(legend.position = "none")
+
+p
+
+save_plot(file.path(gp3_fig_dir, "umap_gp3_harmony_overview_simple.pdf"),
+          p, 
+          base_height = 6,
+          base_asp = 1.2)
+```
+
 ### harmony cluster markers
 
 ```{r fig.height = 6}
@@ -1078,6 +1094,26 @@ save_plot(file.path(gp4_fig_dir, "umap_gp4_harmony_overview.pdf"),
           base_height = 6,
           base_asp = 1.2)
 ```
+
+```{r}
+p <- plot_harmony(so_sub,
+                  "tumor_subpopulations_gp4",
+                  pt_size = 0.2,
+                  label_text = TRUE,
+                  label_color = "black",
+                  ggrepel_opts = list(size = 8, force = 0.13)) +
+  labs(x = "UMAP 1",
+       y = "UMAP 2") + 
+  theme(legend.position = "none")
+
+p
+
+save_plot(file.path(gp4_fig_dir, "umap_gp4_harmony_overview_simple.pdf"),
+          p, 
+          base_height = 6,
+          base_asp = 1.2)
+```
+
 
 ### harmony cluster markers
 

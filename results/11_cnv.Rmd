@@ -38,6 +38,47 @@ walk(fig_dir,
      showWarnings = FALSE)
 ```
 
+## CNVS from methylation data
+
+
+```{r}
+# from methylation data
+
+methyl_cnvs <- tibble::tribble(
+  ~'UPN', ~'methyl_nCNV',
+    "925",   6L,
+    "945",   7L,
+   "1028",   3L,
+   "1130",   6L,
+   "1167",   3L,
+   "1355",   7L,
+   "1433",   8L,
+    "753",   1L,
+    "934",   1L,
+    "966",   4L,
+    "996",  17L,
+   "1066",   2L,
+   "1070",   4L,
+   "1125",   9L,
+   "1155",   7L,
+   "1177",   2L,
+   "1195",   4L,
+   "1238",   9L,
+  "966_2",   5L,
+    "801",   9L,
+    "831",   2L,
+    "877",   2L,
+    "898",   3L,
+   "1224",   0L,
+   "1235",   3L,
+   "1325",   6L,
+   "1397",  14L,
+   "1416",   1L,
+   "1128",   1L
+  )
+
+```
+
 ## Strategy
 
 Tumors cells tend to cluster into largely patient specific clusters. However normal cells (i.e. immune and astrocytes) tend to cluster with cells from multiple patients. This argues that the heterogeneity present in each patient is not simply an artifact from experimental processing, but insteads reflects intrinsic heterogeneity. This hetergeneity could be driven by enviromental factors (tumor location, aggressivness, etc), or tumor genetics. Each patients CNV profile is hetergeneous, suggesting that CNV could driven expression variation, providing an explanation of the hetergeneous expression profiles.
@@ -45,12 +86,12 @@ Tumors cells tend to cluster into largely patient specific clusters. However nor
 To assess this possibility, inferCNV was run to identify CNVs. The genes in these CNV regions will be compared to marker genes of each patients tumor. Need to ensure that markers that are down regulated are enriched in CNV regions that are lost and vice versa.
 
 Here is the coding for the inferCNV hmm results:
-0x: complete loss
-0.5x: loss of one copy
-1x: neutral
-1.5x: addition of one copy
-2x: addition of two copies
-3x: essentially a placeholder for >2x copies but modeled as 3x.
+1: complete loss
+2: loss of one copy
+3: neutral
+4: addition of one copy
+5: addition of two copies
+6: essentially a placeholder for >2x copies but modeled as 3x.
 
 
 ```{r}
@@ -77,10 +118,8 @@ cnv_reports <- mutate(cnv_reports,
                                       simplify = T)[, 1] %>%
                         str_remove("malignant_"),
                       change = case_when(
-                        subgroup %in% c("gp34", "shh") & state < 1 ~ "loss",
-                        !subgroup %in% c("gp34", "shh") & state < 3 ~ "loss",
-                        subgroup %in% c("gp34", "shh") & state > 1 ~ "gain",
-                        !subgroup %in% c("gp34", "shh") & state > 3 ~ "gain",
+                        state < 3 ~ "loss",
+                        state > 3 ~ "gain",
                         TRUE ~ "neutral"
                                       )) 
 
@@ -113,15 +152,15 @@ calc_enrichment <- function(sample_success,
 
 #get some idea of a good background number
 
-so <- readRDS("objects/all_neoplastic.rds")
+so <- qread("objects/preprocess/all_neoplastic.qs")
 
-n_featues_per_patient <- map_int(upns, 
+n_features_per_patient <- map_int(upns, 
                              function(upn){
                                tmp <- subset(so, cells = rownames(so@meta.data)[so$orig.ident == upn])
                                sum(Matrix::rowSums(GetAssayData(tmp, "counts")) > 0)
                              })
 
-gene_pop_size <- median(n_featues_per_patient)
+gene_pop_size <- median(n_features_per_patient)
 
 res <- map_dfr(upns, 
     function(upn){
@@ -164,62 +203,550 @@ res
 ```{r}
 mdata <- so@meta.data %>% 
   as_tibble() %>% 
-  select(UPN, subgroup) %>%
+  select(UPN, subgroup, tx_nCNV) %>%
+  mutate(subgroup = ifelse(UPN == "1167", "GP3", subgroup)) %>% 
   unique() 
 
 plt_dat <- res %>% 
   left_join(mdata, by = c("upn" = "UPN")) %>% 
-  select(upn, 
+  select(upn,
+         tx_nCNV,
+         log2_effect_size,
+         pvalue = pval,
          subgroup,
-         `Marker genes\nin CNVs` = prop_markers_in_cnv, 
-         `CNV genes\nin transcriptome` = prop_genes_in_cnv_in_genome) %>% 
-  pivot_longer(cols = -c(upn, subgroup)) 
+         `Marker genes within a CNV` = prop_markers_in_cnv, 
+         `All genes within a CNV` = prop_genes_in_cnv_in_genome) %>% 
+  pivot_longer(cols = -c(upn, subgroup, pvalue, log2_effect_size, tx_nCNV))
+  # left_join(methyl_cnvs, by = c("upn" = "UPN"))
+
+ncnv_plt_dat <- select(plt_dat, upn, subgroup, tx_nCNV) %>% 
+  unique() %>% 
+  group_by(subgroup) %>% 
+  arrange(tx_nCNV, .by_group = T) %>% 
+  mutate(upn = factor(upn, levels = upn))
+
+plt_dat <- mutate(plt_dat, upn = factor(upn, levels = ncnv_plt_dat$upn))
+
+pval_plt_dat <- plt_dat %>% 
+  select(upn, pvalue, subgroup, value) %>% 
+  unique() %>% 
+  group_by(upn) %>% 
+  mutate(sig = ifelse(pvalue < 1e-100,
+                      "***",
+                      ifelse(pvalue < 1e-10,
+                             "**",
+                             ifelse(pvalue < 0.01,
+                                    "*",
+                                    ""))),
+         value = max(value) * 1.05) 
 
 p <- ggplot(plt_dat, aes(upn, value)) +
   geom_col(aes(fill = name), position = position_dodge2()) +
+  geom_text(data = pval_plt_dat, 
+            aes(label = sig)) + 
   labs(x = "",
        y = "Proportion") +
   facet_grid(subgroup ~ ., space = "free", scales = "free") + 
   scale_fill_manual(name = "",
                     values = palette_OkabeIto) + 
-  coord_flip() + 
+ coord_flip() + 
   theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
         legend.position = "top",
-        strip.text = element_text(size = 6))
+        strip.text = element_text(size = 10))
 
-save_plot("figs/cnv_marker_enrichment.pdf", p, base_asp = 0.75, base_height = 6.5)
+p
+
+
+p2 <- ggplot(ncnv_plt_dat, aes(upn, tx_nCNV)) +
+  geom_col(aes(fill = subgroup), position = position_dodge2()) +
+  labs(x = "Tumor Id",
+       y = "# of CNVs") +
+  facet_grid(subgroup ~ ., space = "free", scales = "free") + 
+  scale_fill_manual(name = "",
+                    values = palette_OkabeIto) + 
+ coord_flip() + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+        legend.position = "top",
+        strip.text = element_blank())
+
+p <- plot_grid(p2, p)
+save_plot("figs/cnvs/cnv_marker_enrichment.pdf", p, 
+          base_asp = 1, base_height = 5.5,
+          nrow = 1,
+          ncol = 2)
+
+
 ```
 For most tumors there is a signficant overlap between marker genes and CNV regions. 1202 and 1224 have non-significant overlap. 
 
 
 # Examine subclones
 
-For some tumors it appears that there are some subclones based on CNV. For this anslysis I will split each tumor into 2 subclones based on HClustering on the CNV results. Then genexpression between theses splits will be evaluated to see if there are DE genes. 
+For some tumors it appears that there are some subclones based on CNV. For this anslysis I will split each tumor into 2 subclones based on HClustering on the CNV results. Then gene expression between theses splits will be evaluated to see if there are DE genes. 
+
+First, regenerate heatmap from inferCNV to save as hi-resolution.
+
 
 ```{r}
 library(ape)
 library(dendextend)
 library(scbp)
-so <- readRDS("objects/gp34.rds")
+library(RColorBrewer)
+library(ComplexHeatmap)
 
 subgroups <- c(
-  "shh",
   "gp3",
-  "gp34",
-  "gp4"
+  "gp4",
+  "shh",
+  "all"
 )
 
 trees <- map(subgroups,
              ~read.tree(
-               file.path("inferCNV",
+               file.path("inferCNV_v2",
              .x, .x,  "infercnv.observations_dendrogram.txt"))) 
 
-# merge dendograms, try to figure out reasonable split
+ref_dat <- map(subgroups,
+             ~read.table(
+               file.path("inferCNV_v2",
+             .x, .x,  "infercnv.references.txt"), 
+             sep = " ") %>% 
+               as.matrix() %>% 
+               t()) 
+
+ob_dat <- map(subgroups,
+             ~read.table(
+               file.path("inferCNV_v2",
+             .x, .x,  "infercnv.observations.txt"), 
+             sep = " ") %>% 
+               as.matrix() %>% 
+               t()) 
+
+gene_df <- read_tsv("inferCNV_v2/gene_ordering_file.txt",
+                    col_names = c("gene", "chrom", "start", "stop"))
+
+# merge per tumor dendograms for each subgroup
 ds <- map(trees, 
     ~map(.x, as.dendrogram)) %>% 
   map(., 
-      ~Reduce(function(x, y){merge(x,y)}, .x))
+      ~Reduce(function(x, y) {merge(x, y)}, .x))
 
+# save heatmap inputs as rds files 
+
+dir.create(file.path("objects", "cnv"))
+for(i in seq_along(subgroups)){
+  saveRDS(list(
+    ob = ob_dat[[i]],
+    ref = ref_dat[[i]],
+    genes = gene_df,
+    dend =  ds[[i]]
+  ),
+  file.path("objects", "cnv", paste0(subgroups[i], "_hmap.rds"))
+  )
+}
+
+```
+
+
+
+```{r}
+plot_cnv_heatmap <- function(ob_dat, 
+                             ref_dat,
+                             gene_df, 
+                             dend, 
+                             grp = "SHH", 
+                             grp_col = palette_OkabeIto[3]){
+  
+  col_fun <- circlize::colorRamp2(c(min(ob_dat), median(ob_dat), max(ob_dat)),
+                                  c("blue", "#FFFFFF", "red"))
+  
+  chr_annot <- left_join(tibble(gene = colnames(ob_dat)),
+                         gene_df) %>%
+    mutate(chrom = str_remove(chrom, "chr"), 
+           chrom = factor(chrom, levels = unique(chrom))) %>% 
+    column_to_rownames("gene") %>% 
+    select(-start, -stop) 
+
+  
+  ob_annot <- data.frame(
+    row.names = rownames(ob_dat),
+    #subgroup = grp,
+    tumor = str_remove(rownames(ob_dat), "^X") %>% 
+      str_split(., "_", simplify = TRUE) %>% .[ ,1],
+    stringsAsFactors = FALSE
+  )
+  
+  tumor_order <- sort(unique(as.character(ob_annot$tumor)))
+  
+  subgroup_cols <-  palette_OkabeIto[1]
+  names(subgroup_cols) <- grp
+  
+  ha_ob <- rowAnnotation(df = ob_annot, 
+                         col = list(
+                           subgroup = structure(
+                             grp_col,
+                             names = grp
+                           ),
+                           tumor = structure(
+                             discrete_palette_default[1:length(tumor_order)],
+                             names = tumor_order)
+                         ),
+                         annotation_legend_param = list(by_row = TRUE, 
+                                                      nrow = 2))
+  
+  ob_hmap <- Heatmap(ob_dat, 
+                     heatmap_legend_param = list(title = ""),
+                     col = col_fun,
+                     cluster_columns = FALSE, 
+                     show_row_names =  FALSE,
+                     show_column_names = FALSE, 
+                     cluster_rows = dend,
+                     left_annotation = ha_ob,
+                     use_raster = TRUE,
+                     column_split = chr_annot$chrom,
+                     column_gap = unit(0, "mm"),
+                     column_title_gp = gpar(fontsize = 2),
+                     border = TRUE,
+                     row_title = "Tumor",
+                     raster_device = "png",
+                     raster_quality = 3)
+  
+  ref_hmap <- Heatmap(ref_dat, 
+                      col = col_fun,
+                      cluster_columns = FALSE, 
+                      show_row_names =  FALSE,
+                      show_column_names = FALSE, 
+                      cluster_rows = FALSE,
+                      use_raster = TRUE,
+                      column_split = chr_annot$chrom,
+                      show_heatmap_legend = FALSE,
+                      border = TRUE,
+                      column_gap = unit(0, "mm"),
+                      row_title = "Normal",
+                      raster_device = "png",
+                      raster_quality = 3)
+  
+  ht_list <- ref_hmap %v% ob_hmap
+  
+  dynamic_resize <- 1
+  nobs <- 100
+  pdf(str_c("hmap_", grp, ".pdf"),
+      useDingbats=FALSE,
+      width=11,
+      height = 9 + dynamic_resize * 3.6 * (nobs - 200)/200 )
+  draw(ht_list, heatmap_legend_side = "right", annotation_legend_side = "bottom")
+  dev.off()
+  
+  list(ht_list, ob_hmap)
+}
+
+for(i in seq_along(subgroups)){
+  x <- readRDS(file.path("objects", "cnv", paste0(subgroups[i], "_hmap.rds")))
+   
+  plts <-  plot_cnv_heatmap(x$ob,
+                            x$ref, 
+                            x$genes,
+                            x$dend, 
+                            grp = subgroups[i],
+                            grp_col = palette_OkabeIto[i])
+  
+  saveRDS(plts, file.path("objects", "cnv", paste0(subgroups[i], "_hmap_plots.rds")))
+  rm(x,plts)
+  gc()
+}
+
+```
+
+make heatmap with all
+```{r}
+x <- readRDS(file.path("objects", "cnv", "all_hmap.rds"))
+ob_dat <- x$ob
+ref_dat <- x$ref
+gene_df <- x$genes
+dend <- x$dend
+trees <- read.tree(
+               file.path("inferCNV_v2",
+             "all", "all",  "infercnv.observations_dendrogram.txt")) %>% 
+  map(., as.dendrogram)
+
+names(trees) <- map_chr(trees, 
+                        ~str_split(labels(.x), "_", simplify = T) %>% 
+                          .[, 1] %>% 
+                          ifelse(. == "943", "934", .) %>% 
+                          ifelse(. == "966-2", "966", .) %>% 
+                          unique() 
+                          )
+             
+grps <- c("GP3", "GP4", "SHH", "WNT")
+grp_cols <- palette_OkabeIto[1:4]
+
+
+col_fun <- circlize::colorRamp2(c(min(ob_dat), median(ob_dat), max(ob_dat)),
+                                  c("blue", "#FFFFFF", "red"))
+  
+mdata <- read_excel(file.path(doc_dir, 
+                                   "MED scRNAseq batch and annotations 5.8.19.xlsx")) %>% 
+  filter(subgroup != "LGG") %>% 
+  select(-subgroup)
+
+mdata_updated <- read_excel(file.path(doc_dir, 
+                                   "MED scRNAseq batch and annotations no TBD 5.28.19.xlsx")) %>% 
+  rename(subgroup = `subgroup by transcriptomics` , 
+         date = ...7,
+         fq_id = ...8 ) %>% 
+  filter(subgroup != "LGG") %>% 
+  select(UPN, subgroup)
+
+mdata <- left_join(mdata_updated, mdata, by = "UPN")
+
+ob_annot <- tibble(
+  ids = rownames(ob_dat),
+  tumor = str_remove(rownames(ob_dat), "^X") %>% 
+    str_split(., "_", simplify = TRUE) %>% .[ ,1]
+) %>% 
+  left_join(mdata, by = c("tumor" = "UPN")) %>% 
+  select(ids, tumor, subgroup) %>%
+  mutate(subgroup = ifelse(subgroup == "GP3/4", "GP3", subgroup),
+         subgroup = ifelse(tumor == "966.2", "GP4", subgroup),
+         tumor = ifelse(tumor == "966.2", "966", tumor),
+         tumor = ifelse(tumor == "943", "934", tumor)) %>% 
+  group_by(tumor) %>%  
+  column_to_rownames("ids") %>% 
+  as.data.frame(stringsAsFactors = FALSE) 
+
+# 
+ # ob_dat <- ob_dat[rownames(ob_annot), 1:100]
+ # ref_dat <- ref_dat[1:10, 1:100]
+
+chr_annot <- left_join(tibble(gene = colnames(ob_dat)),
+                       gene_df) %>%
+  mutate(chrom = str_remove(chrom, "chr"), 
+         chrom = factor(chrom, levels = unique(chrom))) %>% 
+  column_to_rownames("gene") %>% 
+  select(-start, -stop) 
+
+
+
+tumor_order <- sort(unique(as.character(ob_annot$tumor)))
+
+subgroup_cols <-  grp_cols
+names(subgroup_cols) <- grps
+
+ha_ob <- rowAnnotation(df = ob_annot, 
+                       col = list(
+                         subgroup = structure(
+                           grp_cols,
+                           names = grps
+                         ),
+                         tumor = structure(
+                           discrete_palette_default[1:length(tumor_order)],
+                           names = tumor_order)
+                       ),
+                       annotation_legend_param = list(by_row = TRUE, 
+                                                      nrow = 2))
+
+
+dend <- map(split(ob_annot, ob_annot$subgroup),
+            ~{
+     d <- as.dendrogram(hclust(dist(ob_dat[rownames(.x), ]))) %>% 
+     Reduce(function(x, y) {merge(x, y)}, .)
+
+ob_hmap <- Heatmap(ob_dat, 
+                   heatmap_legend_param = list(title = ""),
+                   col = col_fun,
+                   cluster_columns = FALSE, 
+                   show_row_names =  FALSE,
+                   show_column_names = FALSE, 
+                   cluster_rows = FALSE,
+                   split = ob_annot$subgroup,
+                   left_annotation = ha_ob,
+                   column_split = chr_annot$chrom,
+                   column_gap = unit(0, "mm"),
+                   column_title_gp = gpar(fontsize = 2),
+                   cluster_row_slices = FALSE,
+                   border = TRUE,
+                   row_title = "Tumor",
+                   use_raster = TRUE,
+                   raster_device = "png",
+                   raster_quality = 3)
+
+ref_hmap <- Heatmap(ref_dat, 
+                    col = col_fun,
+                    cluster_columns = FALSE, 
+                    show_row_names =  FALSE,
+                    show_column_names = FALSE, 
+                    cluster_rows = FALSE,
+                    use_raster = TRUE,
+                    column_split = chr_annot$chrom,
+                    show_heatmap_legend = FALSE,
+                    border = TRUE,
+                    column_gap = unit(0, "mm"),
+                    row_title = "Normal",
+                    raster_device = "png",
+                    raster_quality = 3)
+
+ht_list <- ref_hmap %v% ob_hmap
+
+dynamic_resize <- 1
+nobs <- nrow(ob_dat)
+nobs <- 100
+pdf(str_c("hmap_all_sub.pdf"),
+    useDingbats=FALSE,
+    width=11,
+    height = 9 + dynamic_resize * 3.6 * (nobs - 200)/200 )
+draw(ht_list, heatmap_legend_side = "right", annotation_legend_side = "bottom")
+dev.off()
+
+list(ht_list, ob_hmap)
+
+```
+
+
+make heatmap with all with subgroup splits
+```{r}
+x <- readRDS(file.path("objects", "cnv", "all_hmap.rds"))
+ob_dat <- x$ob
+ref_dat <- x$ref
+gene_df <- x$genes
+dend <- x$dend
+trees <- read.tree(
+               file.path("inferCNV_v2",
+             "all", "all",  "infercnv.observations_dendrogram.txt")) %>% 
+  map(., as.dendrogram)
+
+names(trees) <- map_chr(trees, 
+                        ~str_split(labels(.x), "_", simplify = T) %>% 
+                          .[, 1] %>% 
+                          ifelse(. == "943", "934", .) %>% 
+                          ifelse(. == "966-2", "966", .) %>% 
+                          unique() 
+                          )
+             
+grps <- c("GP3", "GP4", "SHH", "WNT")
+grp_cols <- palette_OkabeIto[1:4]
+
+
+col_fun <- circlize::colorRamp2(c(min(ob_dat), median(ob_dat), max(ob_dat)),
+                                  c("blue", "#FFFFFF", "red"))
+  
+mdata <- read_excel(file.path(doc_dir, 
+                                   "MED scRNAseq batch and annotations 5.8.19.xlsx")) %>% 
+  filter(subgroup != "LGG") %>% 
+  select(-subgroup)
+
+mdata_updated <- read_excel(file.path(doc_dir, 
+                                   "MED scRNAseq batch and annotations no TBD 5.28.19.xlsx")) %>% 
+  rename(subgroup = `subgroup by transcriptomics` , 
+         date = ...7,
+         fq_id = ...8 ) %>% 
+  filter(subgroup != "LGG") %>% 
+  select(UPN, subgroup)
+
+mdata <- left_join(mdata_updated, mdata, by = "UPN")
+
+ob_annot <- tibble(
+  ids = rownames(ob_dat),
+  tumor = str_remove(rownames(ob_dat), "^X") %>% 
+    str_split(., "_", simplify = TRUE) %>% .[ ,1]
+) %>% 
+  left_join(mdata, by = c("tumor" = "UPN")) %>% 
+  select(ids, tumor, subgroup) %>%
+  mutate(subgroup = ifelse(subgroup == "GP3/4", "GP3", subgroup),
+         subgroup = ifelse(tumor == "966.2", "GP4", subgroup),
+         tumor = ifelse(tumor == "966.2", "966", tumor),
+         tumor = ifelse(tumor == "943", "934", tumor)) %>% 
+  group_by(tumor) %>%  
+  column_to_rownames("ids") %>% 
+  as.data.frame(stringsAsFactors = FALSE) 
+
+
+
+subgroup_split <- split(ob_annot, ob_annot$subgroup)
+
+hmaps <- map(subgroup_split,
+             ~{
+               ids <- unique(.x$tumor)
+               
+               d <- trees[ids] %>% 
+                 Reduce(function(x, y) {merge(x, y)}, .)
+               
+               ob_to_plot <- ob_dat[rownames(.x), ]
+               
+               chr_annot <- left_join(tibble(gene = colnames(ob_to_plot)),
+                                      gene_df) %>%
+                 mutate(chrom = str_remove(chrom, "chr"), 
+                        chrom = factor(chrom, levels = unique(chrom))) %>% 
+                 column_to_rownames("gene") %>% 
+                 select(-start, -stop) 
+               
+               ha_ob <- rowAnnotation(df = ob_annot[rownames(.x), ], 
+                                      col = list(
+                                        subgroup = structure(
+                                          grp_cols,
+                                          names = grps
+                                        ),
+                                        tumor = structure(
+                                          discrete_palette_default[1:length(tumor_order)],
+                                          names = tumor_order)
+                                      ),
+                                      annotation_legend_param = list(by_row = TRUE, 
+                                                                     nrow = 2))
+               
+               ob_hmap <- Heatmap(ob_to_plot, 
+                                  heatmap_legend_param = list(title = ""),
+                                  col = col_fun,
+                                  cluster_columns = FALSE, 
+                                  show_row_names =  FALSE,
+                                  show_column_names = FALSE, 
+                                  cluster_rows = d,
+                                  #  split = ob_annot$subgroup,
+                                  left_annotation = ha_ob,
+                                  column_split = chr_annot$chrom,
+                                  column_gap = unit(0, "mm"),
+                                  column_title_gp = gpar(fontsize = 2),
+                                  cluster_row_slices = FALSE,
+                                  border = TRUE,
+                                  show_heatmap_legend = unique(.x$subgroup) == "WNT",
+                                  row_title = unique(.x$subgroup),
+                                  use_raster = TRUE,
+                                  raster_device = "png",
+                                  raster_quality = 3)
+             })
+
+ref_hmap <- Heatmap(ref_dat, 
+                    col = col_fun,
+                    cluster_columns = FALSE, 
+                    show_row_names =  FALSE,
+                    show_column_names = FALSE, 
+                    cluster_rows = FALSE,
+                    use_raster = TRUE,
+                    column_split = chr_annot$chrom,
+                    show_heatmap_legend = FALSE,
+                    border = TRUE,
+                    column_gap = unit(0, "mm"),
+                    row_title = "Normal",
+                    raster_device = "png",
+                    raster_quality = 3)
+
+ht_list <- ref_hmap %v% hmaps[[1]] %v% hmaps[[2]] %v% hmaps[[3]] %v% hmaps[[4]] 
+
+dynamic_resize <- 1
+nobs <- nrow(ob_dat)
+nobs <- 100
+pdf(str_c("hmap_all.pdf"),
+    useDingbats=FALSE,
+    width=11,
+    height = 9 + dynamic_resize * 3.6 * (nobs - 200)/200 )
+draw(ht_list, heatmap_legend_side = "right", annotation_legend_side = "bottom")
+dev.off()
+
+
+```
+
+
+
+
+```{r}
 z <- labels(ds[[1]]) %>% str_split("_", simplify = TRUE) %>% .[, 1] %>% as.numeric(as.factor(.))
 
 a <- color_branches(ds[[1]], clusters = z) 
@@ -261,44 +788,6 @@ plot_violin(get_metadata(so), "cnv", "nCount_RNA")
 ```
 
 ## Add CNV data to seurat objects/browser
-
-```{r}
-# from methylation data
-
-methyl_cnvs <- tibble::tribble(
-  ~'UPN', ~'methyl_nCNV',
-    "925",   6L,
-    "945",   7L,
-   "1028",   3L,
-   "1130",   6L,
-   "1167",   3L,
-   "1355",   7L,
-   "1433",   8L,
-    "753",   1L,
-    "934",   1L,
-    "966",   4L,
-    "996",  17L,
-   "1066",   2L,
-   "1070",   4L,
-   "1125",   9L,
-   "1155",   7L,
-   "1177",   2L,
-   "1195",   4L,
-   "1238",   9L,
-  "966_2",   5L,
-    "801",   9L,
-    "831",   2L,
-    "877",   2L,
-    "898",   3L,
-   "1224",   0L,
-   "1235",   3L,
-   "1325",   6L,
-   "1397",  14L,
-   "1416",   1L,
-   "1128",   1L
-  )
-```
-
 
 ```{r}
 
@@ -389,8 +878,93 @@ so <- get_metadata(so) %>%
     AddMetaData(so, .)
  
 plot_umap(so, "methyl_nCNV")
- 
+
+subgroups <- c("shh","gp3", "gp4")
+names(subgroups) <- c("shh", "gp3", "gp4")
+cnv_reports <- map_dfr(subgroups,
+                   ~read_tsv(file.path("inferCNV_v2",
+                                       .x, 
+                                      .x,
+                   "HMM_CNV_predictions.HMMi6.hmm_mode-samples.Pnorm_0.5.pred_cnv_genes.dat")),
+                   .id = "subgroup") %>% 
+  mutate(UPN = str_remove(cell_group_name, "^malignant_") %>% 
+           str_split("\\.", simplify = T) %>% .[, 1])
+
+
+
+nCNV <- cnv_reports %>%
+  filter(state != 3) %>% 
+  group_by(subgroup, UPN) %>% 
+  summarize(tx_nCNV = n_distinct(gene_region_name))
+
+so$tx_nCNV <- get_metadata(so) %>% 
+  select(UPN, coarse_cell_type) %>% 
+   left_join(nCNV, by = "UPN") %>% 
+  mutate(tx_nCNV = ifelse(coarse_cell_type == "malignant",
+                          tx_nCNV,
+                          0L)) %>% 
+  pull(tx_nCNV)
+
 qsave(so, file.path("objects", "preprocess", "all_neoplastic.qs"))
+```
+
+
+
+also add to all data
+
+```{r}
+so <- qread( file.path("objects", "preprocess", "so.qs"))
+
+so$methyl_nCNV <- get_metadata(so) %>% 
+  select(UPN, coarse_cell_type) %>% 
+  left_join(methyl_cnvs, by = "UPN") %>% 
+  mutate(methyl_nCNV = ifelse(coarse_cell_type == "malignant",
+                              methyl_nCNV,
+                              0L)) %>% 
+  pull(methyl_nCNV)
+ 
+p <- plot_umap(so, "methyl_nCNV", legend_title = "")
+p
+save_plot(file.path("figs", "all_data", "umap_by_methylation_cnvs.pdf"),
+          p, 
+          base_asp = 1.2)
+
+subgroups <- c("shh","gp3", "gp4")
+names(subgroups) <- c("shh", "gp3", "gp4")
+cnv_reports <- map_dfr(subgroups,
+                   ~read_tsv(file.path("inferCNV_v2",
+                                       .x, 
+                                      .x,
+                   "HMM_CNV_predictions.HMMi6.hmm_mode-samples.Pnorm_0.5.pred_cnv_genes.dat")),
+                   .id = "subgroup") %>% 
+  mutate(UPN = str_remove(cell_group_name, "^malignant_") %>% 
+           str_split("\\.", simplify = T) %>% .[, 1])
+
+
+nCNV <- cnv_reports %>%
+  filter(state != 3) %>% 
+  group_by(subgroup, UPN) %>% 
+  summarize(tx_nCNV = n_distinct(gene_region_name))
+
+so$tx_nCNV <- get_metadata(so) %>% 
+  select(UPN, coarse_cell_type) %>% 
+   left_join(nCNV, by = "UPN") %>% 
+  mutate(tx_nCNV = ifelse(coarse_cell_type == "malignant",
+                          tx_nCNV,
+                          0L)) %>% 
+  pull(tx_nCNV)
+
+p <- plot_umap(so, "tx_nCNV", legend_title = "")
+p
+save_plot(file.path("figs", "all_data", "umap_by_tx_cnvs.pdf"),
+          p, 
+          base_asp = 1.2)
+
+```
+
+
+```{r}
+qsave(so, file.path("objects", "preprocess", "so.qs"))
 ```
 
 # run once inferCNV finishes
