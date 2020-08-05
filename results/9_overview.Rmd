@@ -277,6 +277,46 @@ save_plot(file.path(all_neo_fig_dir, "umap_neoplastic_by_UPN.pdf"),
           base_asp = 1.4)
 ```
 
+
+### Cell cycle per subpopulation
+
+```{r}
+p <- get_metadata(so) %>% 
+  select(cell, tumor_subpopulation, Phase) %>% 
+  group_by(tumor_subpopulation) %>% 
+  mutate(cells_per_subpopulation = n()) %>% 
+  group_by(tumor_subpopulation, Phase) %>%
+  mutate(cells_per_phase = n(),
+            perc = 100 * (cells_per_phase / cells_per_subpopulation)) %>% 
+  select(-cell) %>% 
+  na.omit() %>% 
+  unique() %>% 
+  arrange(tumor_subpopulation) %>% 
+  mutate(Phase = factor(Phase, levels = c("G1", "S", "G2M"))) %>% 
+  mutate(subgroup = str_split(tumor_subpopulation, "-", simplify = T) %>% .[, 1],
+         subpopulation = str_split(tumor_subpopulation, "-", simplify = T) %>%
+           .[, 2] %>% 
+           str_sub(1, 1)) %>% 
+  ggplot(aes(tumor_subpopulation, perc)) +
+    geom_col(aes(fill = Phase)) +
+    scale_fill_manual(values = palette_OkabeIto) + 
+    facet_grid(~subpopulation, scales = "free_x") +
+    labs(x = "Subpopulation",
+         y = "Percent of cells") +
+  theme(axis.text.x = element_text(angle =90,
+                                   hjust = 1,
+                                   vjust = 0.5),
+        strip.background = element_blank(),
+        strip.text = element_blank())
+
+p 
+
+save_plot(file.path(all_neo_fig_dir, "percent_cycling_per_subgroup.pdf"),
+          p,
+          base_asp = 1.6)
+```
+
+
 # SHH tumors
 
 ```{r}
@@ -592,6 +632,8 @@ res <- so@meta.data %>%
 write_csv(res, file.path(tbls_dir,"shh",  "shh_percent_cells_per_cluster_per_sample.csv"))
 
 ```
+
+
 
 
 # GP3  tumors

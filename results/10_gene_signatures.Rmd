@@ -705,6 +705,316 @@ dev.off()
 ```
 
 
+
+### Mouse models -> Human tumors
+#### Combine mouse models
+
+```{r}
+so_sub_p53 <- qread(file.path(obj_dir,"mouse", "gp34", "gp3_myc_dnp53_sobj.qs")) %>% 
+  subset(., subset = cell_types %in% c("malignant"))
+
+so_sub_gfi <- qread(file.path(obj_dir,"mouse", "gp34", "gp3_myc_gfi1_sobj.qs")) %>% 
+                      subset(., 
+                 subset = cell_types %in% c("malignant", "Neuroendocrine"))
+
+so_shh_sub <- qread(file.path(obj_dir,"mouse", "shh", "shh_sobj.qs")) %>% 
+  subset(., subset = cell_types == "malignant")
+
+m_sos <- list(
+  dnp53_myc = so_sub_p53,
+  gfi1_myc = so_sub_gfi,
+  shh = so_shh_sub
+)
+
+
+m_sos <- imap(m_sos, 
+             ~{.x$clusters <- paste0(.y, "_", .x$clusters)
+               .x
+               })
+m_so <- Reduce(function(x, y) merge(x, y), m_sos)
+rm(m_sos, so_sub_p53, so_sub_gfi, so_shh_sub)
+```
+
+#### Combine human tumors
+
+```{r}
+so_gp3 <- qread(file.path("objects", "gp34", "gp3_only.qs"))
+so_gp4 <- qread(file.path("objects", "gp34", "gp4_only.qs"))
+so_shh <- qread(file.path("objects", "shh", "shh.qs")) 
+ 
+so_gp3$subgroup <- "GP3"
+gp4_to_keep <- colnames(so_gp4)[!str_detect(so_gp4$tumor_subpopulations_gp4, "X") ]
+so_gp4 <- subset(so_gp4, cells = gp4_to_keep)
+
+shh_to_keep <- colnames(so_shh)[so_shh$tumor_subpopulations_shh != "SHH-X1"]
+so_shh <- subset(so_shh, cells = shh_to_keep)
+
+h_sos <- list(
+  gp3 = so_gp3,
+  gp4 = so_gp4,
+  shh = so_shh
+)
+
+h_sos$gp3$subpopulation <- h_sos$gp3$tumor_subpopulations_gp3
+h_sos$gp4$subpopulation <- h_sos$gp4$tumor_subpopulations_gp4
+h_sos$shh$subpopulation <- h_sos$shh$tumor_subpopulations_shh
+
+h_so <- Reduce(function(x, y) merge(x, y), h_sos)
+rm(h_sos, so_gp3, so_gp4, so_shh)
+```
+
+```{r}
+ortholog_table <- "../dbases/mouse_orthologs.tsv"
+
+if(!file.exists(ortholog_table)){
+  library(biomaRt)
+  ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+  
+  orthologs <- getBM(mart = ensembl, 
+      attributes = c("external_gene_name",
+                     "mmusculus_homolog_associated_gene_name"))
+  
+  write_tsv(orthologs, ortholog_table)
+}
+
+orthologs <- read_tsv(ortholog_table)
+
+orthologs <- filter(orthologs,
+                            !is.na(mmusculus_homolog_associated_gene_name)) %>% 
+  group_by(external_gene_name) %>% 
+  mutate(n_orthos_h = n()) %>% 
+  group_by(mmusculus_homolog_associated_gene_name) %>% 
+  mutate(n_orthos_m = n()) %>% 
+  filter(n_orthos_h == 1, n_orthos_m == 1) %>% 
+  select(-starts_with("n_orthos")) %>% 
+  ungroup()
+
+orthologs <- mutate(orthologs, 
+                    ortho_id = str_c(external_gene_name, ":",
+                                     mmusculus_homolog_associated_gene_name))
+```
+
+```{r}
+mats <- set_shared_orthologs(h_so, m_so, orthologs)
+names(mats) <- c("human", "mouse")
+  
+sos <- pmap(list(
+  mats, 
+  list(h_so, m_so),
+  c("subpopulation",
+    "clusters")),
+  function(mat, so, cluster_col) {
+  tmp <- CreateSeuratObject(mat, meta.data = so@meta.data)
+  Idents(tmp) <- cluster_col  
+  avg_expr <- AverageExpression(tmp, return.seurat = FALSE)$RNA
+  
+  var_features <- VariableFeatures(FindVariableFeatures(tmp, nfeatures = 4000))
+  
+  list(avg_expr, var_features, tmp)
+})
+```
+
+#### Make integrated UMAP
+
+```{r}
+pretty_mouse_model_names <- c(
+  "SHH" = "SHH model (SmoM2/Math1-Cre)",
+  "MYC + DNP53" = "GP3 model (Myc-T58A/dn-Trp53)",
+  "MYC + GFI1" = "GP3 model (Myc-T58A/Gfi1)"
+)
+
+sos$human[[3]]$species <- "human"
+sos$mouse[[3]]$species <- "mouse"
+sos$mouse[[3]]$model <- ifelse(startsWith(sos$mouse[[3]]$UPN, "MED"),
+                               "SHH",
+                               sos$mouse[[3]]$expt_ids)
+
+sos$mouse[[3]]$model <- pretty_mouse_model_names[sos$mouse[[3]]$model]
+
+sos$mouse[[3]]$subgroup <- sos$mouse[[3]]$model
+sos$mouse[[3]]$subpopulation <- sos$mouse[[3]]$clusters
+
+so <-  merge(sos$human[[3]], sos$mouse[[3]])
+
+so <- FindVariableFeatures(so, nfeatures = 4000) %>% 
+  ScaleData() %>% 
+  RunPCA(npcs = 50) 
+
+so <- RunUMAP(so, dims = 1:50)
+
+library(harmony)
+so <- RunHarmony(so, "species", theta = 1.0) %>% 
+  RunUMAP(dims = 1:50, reduction = "harmony")
+
+so$subgroup <- factor(so$subgroup, levels = c("GP3",
+    "GP4",
+    "SHH",
+    "GP3 model (Myc-T58A/dn-Trp53)",
+    "GP3 model (Myc-T58A/Gfi1)",
+    "SHH model (SmoM2/Math1-Cre)"
+))
+
+plot_umap(so, 
+          c("subgroup", "model", "species", "subpopulation"), 
+          .cols = c(palette_OkabeIto[-4], discrete_palette_default),
+          sorted = "random",
+          legend_title = "") 
+```
+
+```{r}
+Idents(so) <- "subgroup"
+
+subgroups <- unique(so$subgroup)
+h <- Embeddings(so, "harmony")
+
+avg_h <- lapply(subgroups, 
+       function(x){
+         ids <- names(so$subgroup)[so$subgroup == x]
+         h_tmp <- h[ids, ]
+         m <- colMeans(h_tmp)
+         df <- data.frame(row.names = names(m),
+                    tmp = m)
+         colnames(df) <- x
+         df
+       }) %>% 
+  do.call(cbind, .) 
+
+library(dendextend)
+
+dend <- as.dendrogram(hclust(dist(t(avg_h)), method = "ward.D2"))
+
+labels_colors(dend) <- palette_OkabeIto[-4][order.dendrogram(dend)]
+
+par(cex = 1)
+dend <- set(dend, "labels_cex", 1.5)
+dend <- set(dend, "branches_lwd", 2)
+
+p <- dend %>% 
+  hang.dendrogram %>% 
+  ggplot(., yaxt = 'n', offset_labels = -1) +
+    ylim(-30, max(get_branches_heights(dend))) 
+
+save_plot("tst.pdf", p, base_asp = 0.75, base_height = 8)
+
+```
+
+#### Examine correlation between signatures
+
+```{r}
+shared_var_genes <- union(sos$human[[2]], sos$mouse[[2]])
+
+h_var_mat <- sos$human[[1]][shared_var_genes, ] %>% 
+  t() %>% 
+  scale(scale = FALSE, center = TRUE) %>% 
+  t()
+
+m_var_mat <-  sos$mouse[[1]][shared_var_genes, ] %>% 
+     t() %>% 
+  scale(scale = FALSE, center = TRUE) %>% 
+  t()
+
+res <- list()
+res$r <- matrix(nrow = ncol(m_var_mat),
+                ncol = ncol(h_var_mat))
+res$pvals <- res$r
+
+for(m in seq_along(colnames(m_var_mat))){
+  for(h in seq_along(colnames(h_var_mat))){
+    s <- cor.test(m_var_mat[, m], h_var_mat[, h], method = "pearson")
+    res$r[m, h] <- s$estimate
+    res$pvals[m,h] <- s$p.value
+  }
+}
+
+res$padj <- matrix(p.adjust(res$pvals),
+                   nrow = nrow(res$pvals), 
+                   ncol = ncol(res$pvals),
+                   byrow = FALSE)
+res <- map(res, ~{
+  rownames(.x) <- colnames(m_var_mat)
+  colnames(.x) <- colnames(h_var_mat)
+  .x
+})
+
+library(igraph)
+g <- graph.incidence(res$r, weighted = TRUE)
+g <- delete_edges(g, which(E(g)$weight <= 0.2 | as.vector(t(res$padj)) >= 0.05))
+wc <- cluster_walktrap(g)
+
+V(g)$color <- V(g)$type
+V(g)$shape <- ifelse(V(g)$type, "circle", "rectangle")
+#plot(g, edge.width=E(g)$weight, layout=layout.fruchterman.reingold)
+
+layout <-layout.fruchterman.reingold(g)
+
+new_cols <- ifelse(str_detect(V(g)$name, "^[A-Z]"), 
+                   "white",
+                   ifelse(startsWith(V(g)$name, "shh"),
+                          "black",
+                          ifelse(startsWith(V(g)$name, "gfi1"),
+                          "red",
+                          "grey")))
+                   
+min_cor <- min(E(g)$weight)
+max_cor <- max(E(g)$weight)
+plot(wc, g,
+     col = new_cols,
+     mark.col = alpha(palette_OkabeIto[1:length(groups(wc))], 0.75),
+     mark.border = "black",
+     layout = layout,
+    edge.width= scales::rescale(E(g)$weight, c(1,5)))
+    #  vertex.label = ifelse(startsWith(V(g)$name, "GP3"), 
+    #                        str_remove(V(g)$name, "GP3-"), 
+    #                        str_split(V(g)$name, "-", simplify = T) %>% .[, 2] %>% str_c("M", .)),
+    #  vertex.label.family = "sans",
+    # vertex.label.color = ifelse(startsWith(V(g)$name, "GP3"), "black", "white"))
+
+legend("bottomleft",
+       legend = c(paste("r =", formatC(min_cor, digits = 2)),
+                  paste("r =", formatC(max_cor, digits = 2))),
+       lwd = c(min(scales::rescale(E(g)$weight, c(1,5))),
+               max(scales::rescale(E(g)$weight, c(1,5)))))
+       
+legend("bottomright",
+       legend = c("Human GP3 subpopulations",
+                  "Mouse DNp53 GP3 model",
+                  "Mouse Gfi1 GP3 model"),
+       pch = c(21, 22, 22),
+       pt.bg = c("white", "black", "grey"))
+
+pdf(file.path(fig_dir, "gfi1_and_dnp53_mouse_to_human_correlation_graph.pdf"))
+min_cor <- min(E(g)$weight)
+max_cor <- max(E(g)$weight)
+plot(wc, g,
+     col = new_cols,
+     mark.col = alpha(palette_OkabeIto[1:length(groups(wc))], 0.75),
+     mark.border = "black",
+     layout = layout,
+    edge.width= scales::rescale(E(g)$weight, c(1,5)), 
+     vertex.label = ifelse(startsWith(V(g)$name, "GP3"), 
+                           str_remove(V(g)$name, "GP3-"), 
+                           str_split(V(g)$name, "-", simplify = T) %>% .[, 2] %>% str_c("M", .)),
+     vertex.label.family = "sans",
+    vertex.label.color = ifelse(startsWith(V(g)$name, "GP3"), "black", "white"))
+
+legend("bottomleft",
+       legend = c(paste("r =", formatC(min_cor, digits = 2)),
+                  paste("r =", formatC(max_cor, digits = 2))),
+       lwd = c(min(scales::rescale(E(g)$weight, c(1,5))),
+               max(scales::rescale(E(g)$weight, c(1,5)))),
+       cex = 0.60)
+
+legend("bottomright",
+       legend = c("Human GP3 subpopulations",
+                  "Mouse DNp53 GP3 model",
+                  "Mouse Gfi1 GP3 model"),
+       pch = c(21, 22, 22),
+       pt.bg = c("white", "black", "grey"),
+       cex = 0.60)
+dev.off()
+```
+
+
 ## Marker overlap 
 
 ### GP3 vs GP4 

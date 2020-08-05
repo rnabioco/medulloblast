@@ -2,7 +2,6 @@ library(cowplot)
 library(RColorBrewer)
 library(tidyverse)
 library(Seurat) #v3
-library(tidyverse)
 library(readxl)
 library(here)
 library(scbp)
