@@ -843,8 +843,30 @@ so <- FindVariableFeatures(so, nfeatures = 4000) %>%
 so <- RunUMAP(so, dims = 1:50)
 
 library(harmony)
-so <- RunHarmony(so, "species", theta = 1.0) %>% 
-  RunUMAP(dims = 1:50, reduction = "harmony")
+so <- RunHarmony(so, 
+                 "species",
+                 theta = 1.0, 
+                 reduction.save = "harmony_1") %>% 
+  RunUMAP(dims = 1:50,
+          reduction = "harmony_1", 
+          reduction.name = "Harmony_UMAP_1")
+
+so <- RunHarmony(so, 
+                 "species",
+                 theta = 2.0, 
+                 reduction.save = "harmony_2") %>% 
+  RunUMAP(dims = 1:50, 
+          reduction = "harmony_2", 
+          reduction.name = "Harmony_UMAP_2")
+
+so <- RunHarmony(so, 
+                 "species",
+                 theta = 3.0, 
+                 reduction.save = "harmony_3") %>% 
+  RunUMAP(dims = 1:50, 
+          reduction = "harmony_3", 
+          reduction.name = "Harmony_UMAP_3")
+
 
 so$subgroup <- factor(so$subgroup, levels = c("GP3",
     "GP4",
@@ -854,48 +876,70 @@ so$subgroup <- factor(so$subgroup, levels = c("GP3",
     "SHH model (SmoM2/Math1-Cre)"
 ))
 
-plot_umap(so, 
-          c("subgroup", "model", "species", "subpopulation"), 
-          .cols = c(palette_OkabeIto[-4], discrete_palette_default),
-          sorted = "random",
-          legend_title = "") 
+umap_types <- c("umap", "Harmony_UMAP_1", "Harmony_UMAP_2", "Harmony_UMAP_3")
+umaps <- map(umap_types,
+             ~plot_feature(so, 
+                           "subgroup", 
+                           .cols = palette_OkabeIto[-4],
+                           sorted = "random",
+                           legend_title = "", embedding = .x) +
+               labs(x = "UMAP 1",
+                    y = "UMAP 2")) 
 ```
 
 ```{r}
 Idents(so) <- "subgroup"
 
 subgroups <- unique(so$subgroup)
-h <- Embeddings(so, "harmony")
-
-avg_h <- lapply(subgroups, 
-       function(x){
-         ids <- names(so$subgroup)[so$subgroup == x]
-         h_tmp <- h[ids, ]
-         m <- colMeans(h_tmp)
-         df <- data.frame(row.names = names(m),
-                    tmp = m)
-         colnames(df) <- x
-         df
-       }) %>% 
-  do.call(cbind, .) 
+reductions <- c("pca", "harmony_1", "harmony_2", "harmony_3")
+avg_h <- map(reductions, ~{
+  h <- Embeddings(so, .x)
+  
+  avg_h <- lapply(subgroups, 
+                  function(x){
+                    ids <- names(so$subgroup)[so$subgroup == x]
+                    h_tmp <- h[ids, ]
+                    m <- colMeans(h_tmp)
+                    df <- data.frame(row.names = names(m),
+                                     tmp = m)
+                    colnames(df) <- x
+                    df
+                  }) %>% 
+    do.call(cbind, .) 
+  avg_h
+})
 
 library(dendextend)
 
-dend <- as.dendrogram(hclust(dist(t(avg_h)), method = "ward.D2"))
-
-labels_colors(dend) <- palette_OkabeIto[-4][order.dendrogram(dend)]
-
-par(cex = 1)
-dend <- set(dend, "labels_cex", 1.5)
-dend <- set(dend, "branches_lwd", 2)
-
-p <- dend %>% 
-  hang.dendrogram %>% 
-  ggplot(., yaxt = 'n', offset_labels = -1) +
+dends <- map(avg_h, ~{
+  dend <- as.dendrogram(hclust(dist(t(.x)), method = "ward.D2"))
+  labels(dend) <- str_replace(labels(dend), "model ", "model\n")
+  labels_colors(dend) <- palette_OkabeIto[-4][order.dendrogram(dend)]
+  dend <- set(dend, "labels_cex", 0.8)
+  dend <- set(dend, "branches_lwd", 0.8)
+  p <- dend %>% 
+    hang.dendrogram %>% 
+    ggplot(., yaxt = 'n', offset_labels = -1) +
     ylim(-30, max(get_branches_heights(dend))) 
+})
 
-save_plot("tst.pdf", p, base_asp = 0.75, base_height = 8)
-
+plts <- map2(umaps, dends, ~list(.x, .y)) %>% flatten()
+plt <- plot_grid(plotlist = plts,
+                 nrow = 4, 
+                 ncol = 2, 
+                 rel_widths = c(1.66, 1), 
+                 labels = c("", "   PCA          ",
+                            "", "Harmony (theta = 1)",
+                            "", "Harmony (theta = 2)", 
+                            "", "Harmony (theta = 3)"),
+                 hjust = 1)
+save_plot(file.path(fig_dir,
+                    "cell_type_signature_comparisons",
+                    "mouse-human-harmonized-comparison.pdf"),
+          plt,
+          base_asp = 1.6,
+          nrow = 4, 
+          ncol = 2)
 ```
 
 #### Examine correlation between signatures
