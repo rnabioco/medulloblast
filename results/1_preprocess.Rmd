@@ -124,7 +124,6 @@ for(i in seq_along(p)){
 
 ## Preprocessing {.tabset}
 
-## Rerun preprocessing scaling, PCA, UMAP, etc. 
 
 ```{r create_seurat, message = F, results = 'hide', warning = F}
 so <- CreateSeuratObject(
@@ -170,7 +169,7 @@ so@meta.data <- get_metadata(so, embedding = NULL) %>%
   as.data.frame() %>% 
   tibble::column_to_rownames("cell")
 
-saveRDS(so, file.path(obj_dir, "unfiltered.rds"))
+qsave(so, file.path(obj_dir, "unfiltered.qs"), nthreads = 4)
 ```
 
 ### Percent Mitochondrial UMIs 

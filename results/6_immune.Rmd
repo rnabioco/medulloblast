@@ -792,7 +792,7 @@ go_res[["result"]] %>%
 ```{r}
 
 new_ids <- c(
-  "6" = "Non-activated microglia (NA-M)",
+  "6" = "Non-activated microglia (NA-Microglia)",
   "1" = "Complement myeloid (Complement-M)",
   "3" = "M2-activated myeloid  (M2-M)",
   "2" = "Chemokine myeloid (Chemokine-M)",
@@ -843,4 +843,31 @@ save_plot(file.path(fig_dir, "publication_cell_type_labels.pdf"),
 ```
 
 
+```{r}
+library(presto)
+
+Idents(so) <- "publication_cell_types"
+
+full_mkrs <- wilcoxauc(so, "publication_cell_types")
+
+mkrs <- filter(full_mkrs, logFC > 0, padj < 0.05, pct_in > 0.10) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC), .by_group = TRUE)
+
+mkrs %>% 
+  write_tsv(file.path(mkrs_dir, "immune_publication_cell_type_markers.tsv"))
+
+mkrs %>% 
+  ungroup() %>% 
+  split(., .$group) %>% 
+  write_markers_xlsx(.,
+                     file.path(tbls_dir, "immune_publication_cell_type_markers.xlsx"))
+
+full_mkrs %>% 
+  write_tsv(file.path(mkrs_dir, "immune_publication_cell_type_full_results.tsv"))
+
+```
+```{r eval = FALSE}
+qsave(so, file.path(obj_dir, "immune_so.qs"))
+```
 

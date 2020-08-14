@@ -28,19 +28,58 @@ library(scbp)
 library(tidyverse)
 library(qs)
 library(Seurat)
-cb_outdir <- "cellbrowser"
+library(glue)
+cb_outdir <- file.path("cellbrowser", "publication")
 alra_objs <- file.path("objects", "alra")
 dir.create(alra_objs, recursive = TRUE, showWarnings = FALSE)
+
 def_embeddings <- function(so) {str_subset(names(so@reductions), "umap")}
+
+write_config <- function(x, path){
+  glue('{key}="{value}"', 
+     key = names(x), 
+     value = x) %>% 
+    write_lines(path)
+}
 
 qread <- function(file, ...) {qs::qread(file, ..., nthreads = 4, use_alt_rep = FALSE)}
 ```
+# Collection overview
 
-# All cells
+```{r}
+collection_cb <- c(shortLabel="single cell survey of mouse and human medulloblastoma")
+
+collection_desc <- c(title="Single cell survey of childhood Medulloblastoma",
+                     abstract="We explored cellular heterogeneity in medulloblastoma (MB) using single-cell RNA sequencing (scRNA-seq), immunohistochemistry and deconvolution of bulk transcriptomic data. Over 45,000 cells from 28 patients from all main subgroups of medulloblastoma (1 WNT, 9 SHH, 7 GP3 and 11 GP4) were clustered using Harmony alignment to identify conserved subpopulations. Each subgroup contained subpopulations exhibiting mitotic, undifferentiated and neuronal differentiated transcript profiles, corroborating other recent medulloblastoma scRNA-seq studies. The magnitude of our present study builds on the findings of existing studies, and characterizes new  conserved neoplastic subpopulations. We uncovered a photoreceptor-differentiated subpopulation that was predominantly found in GP3 medulloblastoma, and in SHH, a subpopulation that constitutes differentiating nodules. Deconvolution of a large transcriptomic dataset showed that neoplastic subpopulations are associated with major and minor subgroup subdivisions, for example, photoreceptor subpopulation cells are more abundant in GP3-alpha. This scRNA-seq dataset also afforded unique insights into the diverse immune landscape of medulloblastoma, and revealed an SHH nodule-associated myeloid subpopulation. Additionally, we performed scRNA-seq on 16,000 cells from genetically engineered mouse (GEM) models of GP3 and SHH medulloblastoma. These models showed a level of fidelity with corresponding human subgroup-specific neoplastic subpopulations. Collectively, our findings advance our understanding of the neoplastic and immune landscape of the main medulloblastoma subgroups in both humans and GEM models.",
+                     unitDesc="Log-normalized counts",
+                     geo_series="GSE155446",
+                     image="MAF_Logo_Purple_Tagline-300x163.png",
+                     other_url="https://github.com/rnabioco/medulloblast")
+
+write_config(collection_cb, file.path(cb_outdir, "cellbrowser.conf"))
+write_config(collection_desc, file.path(cb_outdir, "desc.conf"))
+```
+
+
+# Human tumors
+
+```{r}
+collection_cb <- c(shortLabel="Childhood MB (WNT,GP3,GP4,SHH)")
+
+collection_desc <- c(title="Childhood Medulloblastoma",
+                     abstract="single cell RNA-seq of childhood MB (1 WNT, 9 SHH, 7 GP3 and 11 GP4)")
+
+write_config(collection_cb, file.path(cb_outdir, "human", "cellbrowser.conf"))
+write_config(collection_desc, file.path(cb_outdir, "human", "desc.conf"))
+```
+
+## All cells
 
 
 ```{r}
 so <- qread(file.path("objects", "preprocess", "so.qs"))
+
+so$subgroup <- ifelse(so$subgroup == "GP3/4", "GP3", so$subgroup)
 
 cols_to_keep <- c(
   `genes per cell` = "nFeature_RNA",
@@ -59,8 +98,8 @@ make_cellbrowser(so,
                  secondary_cols = c(
                     "subgroup",
                     "cell_type"), 
-                 project = "medulloblastoma",
-                 outdir = cb_outdir,
+                 project = "All-cells",
+                 outdir = file.path(cb_outdir, "human"),
                  marker_file = "markers/preprocess/coarse_cluster_markers_all_data.tsv",
                  ident = "clusters",
                  embeddings = def_embeddings(so),
@@ -75,68 +114,8 @@ make_cellbrowser(so,
 ```
 
 
-# Malignant only 
 
-```{r}
-so <- qread(file.path("objects", "preprocess", "all_neoplastic.qs"))
-
-so$tumor_cell_type_subgroup_specific <- ifelse(is.na( so$tumor_cell_type_subgroup_specific),
-                                                "not_classified",
-                                                so$tumor_cell_type_subgroup_specific) %>% 
-  str_replace_all(., ",", "")
-
-so$tumor_cell_types_all_subgroups <-  str_replace_all(so$tumor_cell_types_all_subgroups, ",", " ")
-
-so$tumor_subpopulation <- ifelse(is.na(so$tumor_subpopulation),
-                                 "not-defined",
-                                 so$tumor_subpopulation)
-cols_to_keep <- c(
-  `genes per cell` = "nFeature_RNA",
-  `UMIs per cell` = "nCount_RNA",
-  `percent of UMIs as mitochondria` = "percent.mt",
-  `unaligned_clusters` = "coarse_clusters_malignant",
-  `aligned_clusters` = "coarse_clusters_malignant_harmony",
-  `other_sample_info` = "additional_info",
-  `subgroup` = "subgroup",
-  `subtype` = "subtype",
-  `subtype_aligned` = "subtype_aligned",
-  `UPN` = "UPN",
-  `Cell Cycle Phase` = "Phase",
-  `Subgroup specific tumor cell types` = "tumor_cell_type_subgroup_specific",
-  `All subgroup tumor cell types` = "tumor_cell_types_all_subgroups",
-  `Subgroup subpopulations` = "tumor_subpopulation",
-  unaligned_cluster_diversity = "unaligned_cluster_diversity", 
-  aligned_cluster_diversity = "aligned_cluster_diversity"
-  )
-
-make_cellbrowser(so, 
-                 column_list = cols_to_keep,
-                 secondary_cols = c(
-            "subgroup"), 
-                 project = "medulloblastoma_neoplastic",
-                 outdir = cb_outdir,
-                 marker_file = "markers/preprocess/cluster_harmony_markers_neoplastic.tsv",
-                 ident = "aligned_clusters",
-                 embeddings = def_embeddings(so),
-                 skip_expr_matrix = TRUE,
-                 config = list(priority = 2,  
-                               radius = 2),
-                 description = list(    
-                   title = "Medulloblastoma Neoplastic cells",
-                   description = str_c(c("Only neoplastic cells are shown, includes WNT subgroup. There are both unaligned and aligned projections. Includes cell type labels defined from examining all tumors in a harmonized projection, and cell types defined by harmonizing each subgroup independently.  ",
-                   "",
-                   "##### Changelog:  ",
-                   "2020-04-29 Added Subpopulation designation (e.g. GP3-A1,SHH-B1)  "),
-                   collapse = "\n")
-                    
-                 )
-)
-
-gc()
-```
-
-
-# SHH subgroup
+## SHH subgroup
 
 ```{r}
 so <- qread(file.path("objects", "shh", "shh.qs"))
@@ -173,28 +152,9 @@ so@assays$alra <- get_alra_assay(so,
                                  file.path(alra_objs, "shh.qs"),
                                  overwrite = FALSE)
 
-make_cellbrowser(so, 
-                 column_list = cols_to_keep,
-                 secondary_cols = 
-                   c("subtype",
-                     "cell_type",
-                     "subgroup",
-                     "cell cycle phase"), 
-                 project = "medulloblastoma_neoplastic_shh",
-                 outdir = cb_outdir,
-                 marker_file = "markers/shh/harmony_subpopulation_markers_SHH.tsv",
-                 ident = "Subpopulations",
-                 embeddings = def_embeddings(so),
-                 skip_expr_matrix = FALSE, 
-                 assays = c("ALRA_" = "alra",
-                            "CNV_" = "CNV"),
-                  config = list(priority = 3,  
-                               radius = 2),
-                 description = list(    
-                   title = "Medulloblastoma SHH subgroup",
-                   description = str_c(c(
+markdown::markdownToHTML(text = c(
                    "Neoplastic cells from SHH subgroup.  ",
-                   "There are both unaligned and aligned projections  ",
+                   "There are both unaligned (umap) and aligned (harmony_umap) projections  ",
                    "",
                    "##### Changelog:  ",
                    "2020-05-15 Added 'SHH tumor cell types refined', which contains more refined clustering to produce more gene signatures  ", 
@@ -208,40 +168,9 @@ make_cellbrowser(so,
 "  +  top_loss_n/top_dupli_n are the n loss/duplication cnvs that cover the most genes  ",
                     "",
                    "2020-04-29 Added Subpopulation designation (e.g. SHH-B1)  "),
-                   collapse = "\n")
-                 )
-)
-```
+  output = file.path(cb_outdir, "human", "SHH-neoplastic-cells", "abstract.html"),
+  fragment.only = TRUE)
 
-
-# Gp3 3/4 4 subgroups
-
-
-```{r}
-so <- qread(file.path("objects", "gp34", "gp34.qs"))
-
-cols_to_keep <- c(
-  `genes per cell` = "nFeature_RNA",
-  `UMIs per cell` = "nCount_RNA",
-  `percent of UMIs as mitochondria` = "percent.mt",
-  `clusters_unaligned` = "coarse_clusters_gp34",
-  `clusters_aligned` = "coarse_clusters_gp34_harmony",
-  `subgroup` = "subgroup",
-  `subtype` = "subtype",
-  `Dx` = "Dx",
-  `UPN` = "UPN",
-  `other_sample_info` = "additional_info",
-   cell_type = "coarse_cell_type",
-   `cell cycle phase` = "Phase",
-  "Northcutt_Group 3/4-A-cell_cycle" = "Group 3/4-A-cell_cycle",
-  "Northcutt_Group 3/4-B-Translation_Myc" = "Group 3/4-B-Translation_Myc",
-  "Northcutt_Group 3/4-C-Differentiation" = "Group 3/4-C-Differentiation",
-  "CytoTRACE-GCS" = "GCS",
-  "CytoTRACE-score" = "CytoTRACE",
-  unaligned_cluster_diversity = "unaligned_cluster_diversity", 
-  aligned_cluster_diversity = "aligned_cluster_diversity")
-
-#so <- RunALRA(so, setDefaultAssay = FALSE)
 make_cellbrowser(so, 
                  column_list = cols_to_keep,
                  secondary_cols = 
@@ -249,24 +178,26 @@ make_cellbrowser(so,
                      "cell_type",
                      "subgroup",
                      "cell cycle phase"), 
-                 project = "medulloblastoma_neoplastic_gp34",
-                 outdir = cb_outdir,
-                 marker_file = "markers/gp34/harmony_markers_gp34.tsv",
-                 ident = "clusters_aligned",
+                 project = "SHH-neoplastic-cells",
+                 outdir = file.path(cb_outdir, "human"),
+                 marker_file = "markers/shh/harmony_subpopulation_markers_SHH.tsv",
+                 ident = "Subpopulations",
                  embeddings = def_embeddings(so),
-                 skip_expr_matrix = TRUE,
-                assays = c("ALRA_" = "alra"),
-                  config = list(priority = 4),
+                 skip_expr_matrix = TRUE, 
+                 assays = c("ALRA_" = "alra",
+                            "CNV_" = "CNV"),
+                  config = list(priority = 3,  
+                               radius = 2),
                  description = list(    
-                   title = "Medulloblastoma Group 3, 3+4, and 4 subgroups",
-                   description = "Neoplastic cells from group3/4 subgroups.
-                   There are both unaligned and aligned projections"
+                   title = "Medulloblastoma SHH subgroup",
+                   abstractFile = "abstract.html" 
                  )
 )
 ```
 
 
-# Gp3 subgroup
+
+## Gp3 subgroup
 
 
 ```{r}
@@ -306,6 +237,26 @@ so@assays$alra <- get_alra_assay(so,
                                  file.path(alra_objs, "gp3.qs"),
                                  overwrite = FALSE)
 
+markdown::markdownToHTML(text = c(
+  "Neoplastic cells from group3 subgroup.  ",
+  "There are both unaligned (umap) and aligned (harmony_umap) projections  ",
+  "",
+  "##### Changelog:  ",
+  "2020-05-15 Added 'GP3 tumor cell types refined', which contains more refined clustering to produce more gene signatures  ", 
+  "2020-05-15 Added CNV metrics:   ",
+  "",
+  "* CNV count (methylation): # of CNVs based on methylation data  ",
+  "* CNV calls per cell based on inferCNV have been added to the data matrix, which can be viewed by querying the 'Color by gene' tab for cnv metrics. The metrics are prefixed with 'CNV_' (e.g. CNV_has-cnv-chr9, CNV_proportion_cnv-chr22)  ",
+  "  +  The fields has_cnv/has_loss/has_dupli are 0/1 boolean answers to whether respectively any kind of cnv, a loss or a duplication is found within the given chr.  ",
+  "  +  proportion_cnv/proportion_loss/proportion_dupli is the proportion in number of genes that are part of any cnv/loss cnv/duplication cnv in the given chr.  ",
+  "  +  proportion_scaled are similar to proportion but taking into account whether genes that are duplications/losses are of a single copy or two copies as a weight  ",
+  "  +  top_loss_n/top_dupli_n are the n loss/duplication cnvs that cover the most genes  ",
+  "",
+  "2020-04-29 Added Subpopulation designation (e.g. GP3-B1)  ",
+  "2020-04-29 Reclustered to add in tumor 1167 cells  "),
+  output = file.path(cb_outdir, "human", "GP3-neoplastic-cells", "abstract.html"),
+  fragment.only = TRUE)
+
 scbp::make_cellbrowser(so, 
                  column_list = cols_to_keep,
                  secondary_cols = 
@@ -313,43 +264,25 @@ scbp::make_cellbrowser(so,
                      "cell_type",
                      "subgroup",
                      "cell cycle phase"), 
-                 project = "medulloblastoma_neoplastic_gp3_only",
-                 outdir = cb_outdir,
+                 project = "GP3-neoplastic-cells",
+                 outdir = file.path(cb_outdir, "human"),
                  marker_file = "markers/gp3/harmony_subpopulation_markers_gp3.tsv",
                  ident = "Subpopulations",
                  embeddings = def_embeddings(so),
-                 skip_expr_matrix = FALSE,
+                 skip_expr_matrix = TRUE,
                  assays = c("ALRA_" = "alra",
                             "CNV_" = "CNV"),
                    config = list(priority = 5),
                  description = list(    
                    title = "Medulloblastoma Group 3 subgroup",
-                   description = str_c(c(
-                   "Neoplastic cells from group3 subgroup.  ",
-                   "There are both unaligned and aligned projections  ",
-                   "",
-                   "##### Changelog:  ",
-                    "2020-05-15 Added 'GP3 tumor cell types refined', which contains more refined clustering to produce more gene signatures  ", 
-                   "2020-05-15 Added CNV metrics:   ",
-                   "",
-                   "* CNV count (methylation): # of CNVs based on methylation data  ",
-                   "* CNV calls per cell based on inferCNV have been added to the data matrix, which can be viewed by querying the 'Color by gene' tab for cnv metrics. The metrics are prefixed with 'CNV_' (e.g. CNV_has-cnv-chr9, CNV_proportion_cnv-chr22)  ",
-                   "  +  The fields has_cnv/has_loss/has_dupli are 0/1 boolean answers to whether respectively any kind of cnv, a loss or a duplication is found within the given chr.  ",
-"  +  proportion_cnv/proportion_loss/proportion_dupli is the proportion in number of genes that are part of any cnv/loss cnv/duplication cnv in the given chr.  ",
-"  +  proportion_scaled are similar to proportion but taking into account whether genes that are duplications/losses are of a single copy or two copies as a weight  ",
-"  +  top_loss_n/top_dupli_n are the n loss/duplication cnvs that cover the most genes  ",
-                    "",
-                   "2020-04-29 Added Subpopulation designation (e.g. GP3-B1)  ",
-                   "2020-04-29 Reclustered to add in GP3/4 tumor 1167 cells  "),
-                   collapse = "\n")
+                   abstractFile = "abstract.html"
                  )
 )
 ```
 
 
 
-# Gp4 subgroup
-
+## Gp4 subgroup
 
 ```{r}
 so <- qread(file.path("objects", "gp34", "gp4_only.qs"))
@@ -387,25 +320,7 @@ so@assays$alra <- get_alra_assay(so,
                                  file.path(alra_objs, "gp4.qs"),
                                  overwrite = FALSE)
 
-make_cellbrowser(so, 
-                 column_list = cols_to_keep,
-                 secondary_cols = 
-                   c("subtype",
-                     "cell_type",
-                     "subgroup",
-                     "cell cycle phase"), 
-                 project = "medulloblastoma_neoplastic_gp4_only",
-                 outdir = cb_outdir,
-                 marker_file = "markers/gp4/harmony_subpopulation_markers_gp4.tsv",
-                 ident = "Subpopulations",
-                 embeddings = def_embeddings(so),
-                 skip_expr_matrix = FALSE,
-                 assays = c("ALRA_" = "alra",
-                            "CNV_" = "CNV"),
-                config = list(priority = 6),
-                 description = list(    
-                   title = "Medulloblastoma Group 4 subgroup",
-                   description = str_c(c(
+markdown::markdownToHTML(text = c(
                    "Neoplastic cells from group4 subgroup.  ",
                    "There are both unaligned and aligned projections  ",
                    "",
@@ -421,22 +336,39 @@ make_cellbrowser(so,
 "  +  top_loss_n/top_dupli_n are the n loss/duplication cnvs that cover the most genes  ",
                     "",
                    "2020-04-29 Added Subpopulation designation (e.g. GP4-B1)  "),
-                   collapse = "\n")
+  output = file.path(cb_outdir, "human", "GP4-neoplastic-cells", "abstract.html"),
+  fragment.only = TRUE)
+
+make_cellbrowser(so, 
+                 column_list = cols_to_keep,
+                 secondary_cols = 
+                   c("subtype",
+                     "cell_type",
+                     "subgroup",
+                     "cell cycle phase"), 
+                 project = "GP4-neoplastic-cells",
+                 outdir = file.path(cb_outdir, "human"),
+                 marker_file = "markers/gp4/harmony_subpopulation_markers_gp4.tsv",
+                 ident = "Subpopulations",
+                 embeddings = def_embeddings(so),
+                 skip_expr_matrix = TRUE,
+                 assays = c("ALRA_" = "alra",
+                            "CNV_" = "CNV"),
+                config = list(priority = 6),
+                 description = list(    
+                   title = "Medulloblastoma Group 4 subgroup",
+                   abstractFile = "abstract.html" 
                  )
 )
 ```
 
 
 
-# Immune populations
-
+## Immune populations
 
 
 ```{r}
 so <- qread(file.path("objects", "immune", "immune_so.qs"))
-
-# dont use commas in cluster ids
-so$new_cell_type_ids <- str_remove(so$new_cell_type_ids, ",")
 
 cols_to_keep <- c(
   `genes per cell` = "nFeature_RNA",
@@ -446,83 +378,50 @@ cols_to_keep <- c(
   `subgroup` = "subgroup",
   `other_sample_info` = "additional_info",
   `UPN` = "UPN",
- # cell_type_fine = "fine_cell_type_ids",
-  new_cell_type_fine = "new_cell_type_ids",
- new_cell_type_short_label = "new_cell_type_ids_short",
-  hpca_cell_type_coarse = "hpca_cell_types",
-  hpca_cell_type_fine = "hpca_fine_cell_types")
+  cell_types = "publication_cell_types")
 
-#so <- RunALRA(so,  setDefaultAssay = FALSE)
+#so <- RunALRA(so, setDefaultAssay = FALSE)
 
 make_cellbrowser(so, 
                  column_list = cols_to_keep,
                  secondary_cols = c(
-                   "hpca_cell_type_coarse",
                    "subgroup"), 
-                 project = "medulloblastoma_immune",
-                 outdir = cb_outdir,
-                 marker_file = "markers/immune/immune_subset_cluster_markers.tsv",
-                 ident = "clusters",
+                 project = "Immune-cells",
+                 outdir = file.path(cb_outdir, "human"),
+                 marker_file = "markers/immune/immune_publication_cell_type_markers.tsv",
+                 ident = "cell_types",
                  embeddings = def_embeddings(so),
                  skip_expr_matrix = TRUE,
                  assays = c("ALRA_" = "alra"),
                  config = list(priority = 7),
                  description = list(    
                    title = "Medulloblastoma immune populations",
-                   description = "Myleoid and lymphocytes populations from all subgroups.
-                   There is only an unaligned projection, as alignment was not necessary"
-                 )
+                   description = "Myleoid and lymphocytes populations from all subgroups.There is only an unaligned projection, as alignment was not necessary")
 )
 ```
 
+# Mouse models
 
-# Mouse model (SHH)
+```{r}
+collection_cb <- c(shortLabel = "Mouse MB tumor models (SHH and GP3)")
 
-```{r, eval = FALSE}
-so <- readRDS( file.path("objects",
-                  "mouse_models",
-                  "shh_model_sobj.rds"))
+collection_desc <- c(title = "Medulloblastoma mouse models",
+                     abstract = "Mouse tumors derived from SHH or GP3 models")
 
-signatures <- paste0("SHH_human_signatures_clust_", 0:7)
-names(signatures) <- signatures
-
-cols_to_keep <- c(
-  `genes per cell` = "nFeature_RNA",
-  `UMIs per cell` = "nCount_RNA",
-  `percent of UMIs as mitochondria` = "percent.mt",
-  `clusters` = "clusters",
-  `sample` = "orig.ident",
-   cell_type = "cell_types",
-  `cell cycle phase` = "Phase",
-  "Northcutt_MetaProgam_A" = "SHH-A_metafactor1",
-  "Northcutt_MetaProgam_B" = "SHH-B_metafactor1",
-  "Northcutt_MetaProgam_C" = "SHH-C_metafactor1")
-
-cols_to_keep <- c(cols_to_keep, signatures)
-make_cellbrowser(so, 
-                 column_list = cols_to_keep,
-                 secondary_cols = c(
-            "sample",
-            "cell_type",
-            "cell cycle phase"), 
-                 project = "medulloblastoma_shh_mouse_model",
-                 outdir = cb_outdir,
-                 marker_file = "markers/mouse_models/tsv/shh_cluster_markers.tsv",
-                 ident = "clusters",
-            embeddings = def_embeddings(so),
-                 skip_expr_matrix = TRUE
-)
+write_config(collection_cb, file.path(cb_outdir, "mouse", "cellbrowser.conf"))
+write_config(collection_desc, file.path(cb_outdir, "mouse", "desc.conf"))
 ```
 
-# Mouse model (Gp34)
+## Mouse model (Gp3) Myc-dnp53
 
-```{r, eval = FALSE}
-so <- readRDS(file.path("objects",
-                  "mouse_models",
-                  "mb_models_sobj.rds"))
+```{r}
+so <- qread(file.path("objects",
+                  "mouse",
+                  "gp34",
+                  "gp3_myc_dnp53_sobj.qs"))
 
-signatures <- paste0("gp34_human_signatures_clust_",
-                     0:7)
+signatures <- paste0("gp3_signatures_clust_",
+                     0:4)
 names(signatures) <- signatures
 
 cols_to_keep <- c(
@@ -531,50 +430,163 @@ cols_to_keep <- c(
   `percent of UMIs as mitochondria` = "percent.mt",
   `clusters` = "clusters",
   `sample` = "expt_ids",
-   cell_type = "cell_types",
+   cell_type = "publication_cell_types",
    `cell cycle phase` = "Phase",
    firefly_expression = "luc-firefly",
    egfp_expression = "egfp",
-  "Northcutt_MetaProgam_A" = "Group 3/4-A_metafactor1",
-  "Northcutt_MetaProgam_B" = "Group 3/4-B_metafactor1",
-  "Northcutt_MetaProgam_C" = "Group 3/4-C_metafactor1"
+  "Northcutt_cell_cycle_A" = "Group 3/4-A_cell_cycle",
+  "Northcutt_Translation_Myc_B" = "Group 3/4-B_Translation_Myc",
+  "Northcutt_Differentiation_C" = "Group 3/4-C_Differentiation"
   )
 
 cols_to_keep <- c(cols_to_keep, signatures)
-
 
 make_cellbrowser(so, 
                  column_list = cols_to_keep,
                  secondary_cols = c(
                     "sample",
-                    "cell_type",
                     "cell cycle phase"), 
-                 project = "medulloblastoma_gp34_mouse_models",
-                 outdir = cb_outdir,
-                 marker_file = "markers/mouse_models/tsv/mb_models_cluster_markers.tsv",
-                 ident = "clusters",
+                 project = "GP3-Myc-dnP53",
+                 outdir = file.path(cb_outdir, "mouse"),
+                 marker_file = "markers/mouse/gp34/myc_dnp53_pub_cell_types_cluster_markers.tsv",
+                 ident = "cell_type",
                  embeddings = def_embeddings(so),
-                 skip_expr_matrix = TRUE
-                 )
+                 skip_expr_matrix = TRUE,
+                 description = list(    
+                   title = "MYC + DNp53 Group 3 medulloblastoma mouse model ",
+                   description = "scRNA-seq on mouse model. No harmony integration performed"
+                 ),
+                 config = list(priority = 1))
 ```
+
+## Mouse model (Gp3) Myc-Gfi1
+```{r}
+so <- qread(file.path("objects",
+                  "mouse",
+                  "gp34",
+                  "gp3_myc_gfi1_sobj.qs"))
+
+signatures <- paste0("gp3_signatures_clust_",
+                     0:4)
+names(signatures) <- signatures
+
+cols_to_keep <- c(
+  `genes per cell` = "nFeature_RNA",
+  `UMIs per cell` = "nCount_RNA",
+  `percent of UMIs as mitochondria` = "percent.mt",
+  `clusters` = "clusters",
+  `sample` = "expt_ids",
+   cell_type = "publication_cell_types",
+   `cell cycle phase` = "Phase",
+   firefly_expression = "luc-firefly",
+   egfp_expression = "egfp",
+  "Northcutt_cell_cycle_A" = "Group 3/4-A_cell_cycle",
+  "Northcutt_Translation_Myc_B" = "Group 3/4-B_Translation_Myc",
+  "Northcutt_Differentiation_C" = "Group 3/4-C_Differentiation"
+  )
+
+cols_to_keep <- c(cols_to_keep, signatures)
+
+make_cellbrowser(so, 
+                 column_list = cols_to_keep,
+                 secondary_cols = c(
+                    "sample",
+                    "cell cycle phase"), 
+                 project = "GP3-Myc-Gfi1",
+                 outdir = file.path(cb_outdir, "mouse"),
+                 marker_file = "markers/mouse/gp34/myc_gfi1_pub_cell_types_cluster_markers.tsv",
+                 ident = "cell_type",
+                 embeddings = def_embeddings(so),
+                 skip_expr_matrix = TRUE,
+                 description = list(    
+                   title = "MYC + GFI1 Group 3 medulloblastoma mouse model ",
+                   description = "scRNA-seq on mouse model. No harmony integration performed"
+                 ),
+                 config = list(priority = 4))
+```
+
+
+## Mouse model (SHH) Math1-Cre1 SmoM2
+
+```{r}
+so <- qread(file.path("objects",
+                  "mouse",
+                  "shh",
+                  "shh_sobj.qs"))
+
+signatures <- paste0("shh_signatures_clust_",
+                     0:6)
+names(signatures) <- signatures
+
+cols_to_keep <- c(
+  `genes per cell` = "nFeature_RNA",
+  `UMIs per cell` = "nCount_RNA",
+  `percent of UMIs as mitochondria` = "percent.mt",
+  `clusters` = "clusters",
+  `sample` = "UPN",
+   cell_type = "publication_cell_types",
+   `cell cycle phase` = "Phase",
+  "Northcutt_cell_cycle_A" = "SHH-A-cell_cycle",
+  "Northcutt_SHH_signaling_B" = "SHH-B-SHH_signaling",
+  "Northcutt_Differentiation_C" = "SHH-C-Differentiation"
+  )
+
+cols_to_keep <- c(cols_to_keep, signatures)
+
+make_cellbrowser(so, 
+                 column_list = cols_to_keep,
+                 secondary_cols = c(
+                    "sample",
+                    "cell cycle phase"), 
+                 project = "SHH-Math-Cre-SmoM2",
+                 outdir = file.path(cb_outdir, "mouse"),
+                 marker_file = "markers/mouse/shh/shh_pub_cell_types_cluster_markers.tsv",
+                 ident = "cell_type",
+                 embeddings = def_embeddings(so),
+                 skip_expr_matrix = TRUE,
+                 description = list(    
+                   title = "SHH medulloblastoma mouse model ",
+                   description = "scRNA-seq on mouse model. No harmony integration performed"
+                 ),
+                 config = list(priority = 7))
+```
+
+
 
 # Build all 
 
 ```{r}
+cb_conf <- read_lines("~/.cellbrowser.conf") %>% 
+  str_subset("dataRoot") %>% 
+  str_split("=") %>% 
+  .[[1]] %>% 
+  .[2] %>% 
+  gsub('\"', "", .)
+
+if((Sys.getenv("CBDATAROOT") != cb_outdir) && (cb_outdir != cb_conf )) {
+  write_lines(paste0('dataRoot="', 
+                     normalizePath(cb_outdir), '"'),
+              "~/.cellbrowser.conf")
+}
+```
+
+```{r}
 datasets <- c(
-   "medulloblastoma/cellbrowser.conf",
-   "medulloblastoma_neoplastic/cellbrowser.conf",
-   "medulloblastoma_neoplastic_shh/cellbrowser.conf",
-   "medulloblastoma_neoplastic_gp34/cellbrowser.conf",
-   "medulloblastoma_immune/cellbrowser.conf",
-   "medulloblastoma_neoplastic_gp3_only/cellbrowser.conf",
-   "medulloblastoma_neoplastic_gp4_only/cellbrowser.conf"
+   "human/All-cells",
+   "human/Immune-cells",
+   "human/GP3-neoplastic-cells",
+   "human/GP4-neoplastic-cells",
+   "human/SHH-neoplastic-cells",
+   "mouse/GP3-Myc-dnP53",
+   "mouse/GP3-Myc-Gfi1",
+   "mouse/SHH-Math-Cre-SmoM2"
 )
 
-datasets <- file.path(cb_outdir, datasets)
+datasets <- file.path(cb_outdir, datasets, "cellbrowser.conf")
 
-build_cellbrowser(datasets, outdir = file.path(cb_outdir, "mblast"))
-
+build_cellbrowser(datasets, 
+                    outdir = file.path(cb_outdir, "mblast"),
+                    cbBuild_path =  "/miniconda3/envs/py37/bin/cbBuild")
 ```
 
 

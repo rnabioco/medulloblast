@@ -29,6 +29,69 @@ library(ComplexHeatmap)
 library(dendextend)
 ```
 
+# QC overview
+
+```{r}
+qc_data_fig_dir <- file.path(fig_dir, "qc")
+dir.create(qc_data_fig_dir, showWarnings = FALSE)
+
+so <- qread(file.path(obj_dir, "preprocess", "unfiltered.qs"), nthreads = 4)
+
+to_drop <- c("1008", "1192", "1202")
+to_keep <- colnames(so)[which(!so@meta.data$orig.ident %in% to_drop)]
+so <- subset(so, cells = to_keep)
+
+so$subgroup_v2 <- ifelse(so$subgroup == "GP3/4", "GP3", so$subgroup)
+
+```
+
+### Percent Mitochondrial UMIs 
+
+```{r}
+p1 <- plot_violin(so@meta.data, 
+            "UPN",
+            "percent.mt",
+            .fill = "subgroup_v2") +
+  labs(x = "", y = "Percent UMIs from Mitochondria") + 
+ geom_hline(aes(yintercept = 30), linetype = "dashed")
+
+save_plot(file.path(qc_data_fig_dir, "prop_mito.pdf"),
+          p1, base_asp = 1.75)
+p1
+```
+
+
+### # of genes detected 
+
+```{r}
+p3 <- plot_violin(so@meta.data,
+            "UPN", 
+            "nFeature_RNA",
+            .fill = "subgroup_v2") +
+  labs(x = "", y = "# of genes per cell")
+
+save_plot(file.path(qc_data_fig_dir, "ngene.pdf"),
+          p3, base_asp = 1.75)
+p3
+```
+
+
+### # of UMIs detected
+
+```{r}
+p2 <- plot_violin(so@meta.data, 
+            "UPN",
+            "nCount_RNA", 
+            .fill = "subgroup_v2") +
+  labs(x = "", y = "# of UMIs") + 
+ geom_hline(aes(yintercept = 40000), linetype = "dashed")
+
+save_plot(file.path(qc_data_fig_dir, "numi.pdf"),
+          p2, base_asp = 1.75)
+p2
+```
+
+
 # All data overview  
 
   
@@ -52,7 +115,8 @@ p <- plot_umap(so, "subgroup_v2",
           label_text = TRUE,
           legend_title = "",
           label_col = "black",
-          sorted = "random", label_repulsion = 0) +
+          sorted = "random", 
+          ggrepel_opts = list(force = 0)) +
   annotate(x = 17,
            y = -18, 
            geom = "text",
@@ -129,6 +193,34 @@ p
 # unable to fix with messing around with seeds, save_plot, ggsave, or pdf...
 ```
 
+```{r}
+p <- plot_umap(so, "UPN", sorted = "random", legend_title = "") + 
+  ggrepel::geom_text_repel(data = plt_text,
+                           min.segment.length = Inf, 
+                           force = 0.2, 
+                           point.padding = unit(0.5, "line"),
+                           aes(label = txt_label),
+                           seed = 1) + 
+  guides(color = guide_legend(ncol = 1, override.aes = list(size = 1))) +
+  annotate(x = -15,
+           y = -18, 
+           size = 3,
+           geom = "text",
+           label = n_cells) +
+  theme(legend.text = element_text(size = 8),
+        legend.key.size = unit(0.5, 'line'),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+        axis.line = element_blank(),
+        axis.ticks = element_blank())
+
+p
+
+save_plot(file.path(all_data_fig_dir, "umap_by_UPN_label_subgroup_no_axes.pdf"),
+          p,
+          base_asp = 1.4)
+```
+
 
 ### coarse clusters
 
@@ -167,7 +259,7 @@ save_plot(file.path(all_data_fig_dir, "umap_by_coarse_cell_type.pdf"),
 ## Plot cell distibutions per subgroup and tumor
 
 ```{r}
-p <- plot_cell_proportions(so, "UPN", "coarse_cell_type_id", facet_by = "subgroup") +
+p4 <- plot_cell_proportions(so, "UPN", "coarse_cell_type_id", facet_by = "subgroup_v2") +
    labs(x = "Tumor ID",
        y = "Proportion of each cell type") +
   scale_fill_manual(values = rev(palette_OkabeIto[1:4]), 
@@ -176,22 +268,27 @@ p <- plot_cell_proportions(so, "UPN", "coarse_cell_type_id", facet_by = "subgrou
 
 
 save_plot(file.path(all_data_fig_dir, "cell_types_per_tumor.pdf"), 
-          p,
+          p4,
           base_width = 7,
           base_aspect_ratio = 1.5)
+p4
 
 ```
 
+Combine with QC plots from above
+```{r}
+p <- plot_grid(p1, p2, p3, p4, nrow = 2, ncol = 2, scale = 0.975)
 
+save_plot(file.path(fig_dir, "qc", "combined_metrics.pdf"), 
+          p, nrow = 2, ncol = 2, base_asp = 1.5)
+p
+```
 
 ## infer CNV figures
 
 run on server per subgroup. Consider replotting heatmaps with better visualizations. 
 
-```{r, eval = FALSE}
-# to do...
-
-```
+See [11_cnv.Rmd](11_cnv.Rmd)
 
 # All neoplastic 
 ## Subtypes based on Cavalli paper
@@ -1741,4 +1838,100 @@ res
 write_csv(res, file.path(tbls_dir, "immune",
                   "immune_subgroups_per_cell_type.csv"))
   
+```
+
+# Combined tumors
+
+```{r}
+so_fns <- c(
+  GP3 = file.path("objects", "gp34", "gp3_only.qs"),
+  GP4 = file.path("objects", "gp34", "gp4_only.qs"),
+  SHH = file.path("objects", "shh", "shh.qs")
+)
+
+sos <- map(so_fns, qread)
+
+clusters <- c("tumor_subpopulations_gp3", 
+              "tumor_subpopulations_gp4", 
+              "tumor_subpopulations_shh")
+
+sos <- map2(sos, clusters, ~{
+  to_keep <- colnames(.x)[!str_detect(.x@meta.data[[.y]], "X")]
+  subset(.x, cells = to_keep)
+})
+
+
+```
+
+```{r}
+mkr_list <- list(
+  GP3 = c("GABRA5",
+          "IMPG2",
+          "EYS",
+          "NRL",
+          "MAB21L2",
+          "NPR3"),
+  GP4 = c("RBM24",
+          "UNC5D",
+          "KCNA1",
+          "EOMES",
+          "KHDRBS2",
+          "OAS1"),
+  SHH = c("PDLIM3",
+          "EYA1",
+          "HHIP",
+          "ATOH1",
+          "SFRP1")
+)
+
+clusters <- c("tumor_subpopulations_gp3", 
+              "tumor_subpopulations_gp4", 
+              "tumor_subpopulations_shh")
+
+plts <- imap(mkr_list,
+    function(mkrs, id) {
+      all_subgroups_plot <- list()
+      for(i in seq_along(sos)){
+        cluster_col <- clusters[i]
+        so <- sos[[i]]
+        plts <- list()
+        to_plot <- c(cluster_col, mkrs)
+        for(j in seq_along(to_plot)){
+
+          if(j == 1){
+            plts[[j]] <-  plot_harmony(so, cluster_col, 
+                    legend_title = "", 
+                    minimal_theme = TRUE,
+                    label_text = TRUE,
+                    label_color = "black",
+                    ggrepel_opts = list(force = 0)) +
+              labs(title = "")
+          } else {
+            plts[[j]] <- plot_harmony(so, to_plot[j], 
+                    legend_title = "", 
+                    minimal_theme = TRUE,
+                    label_text = TRUE,
+                    label_color = "black",
+                    ggrepel_opts = list(force = 0)) +
+              labs(title = ifelse(i == 1, to_plot[j], "")) +
+              theme(title = element_text(size = 30))
+          }
+        }
+        all_subgroups_plot[[i]] <- plot_grid(plotlist = plts, nrow = 1, ncol = length(mkrs) + 1)
+        
+      }
+      p <- plot_grid(plotlist = all_subgroups_plot, 
+                nrow = 3, ncol = 1)
+      
+      save_plot(file.path(all_neo_fig_dir, 
+                           str_c(id, "_marker_overview.pdf")),
+                 p, 
+                 nrow = 3, 
+                 ncol = 7, 
+                 base_asp = 1)
+      p
+})
+
+
+
 ```

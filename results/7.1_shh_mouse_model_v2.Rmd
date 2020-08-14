@@ -74,14 +74,7 @@ cc_mouse_genes <- map(cc.genes.updated.2019,
                         pull(mmusculus_homolog_associated_gene_name))
 ```
 
->
-For the mouse samples
-MP control and MP luc-GFP are similar and both from MP (MYC + DNP53 expression in CD133+ cells) tumor models expressing luciferase. (DN= dominant negative p53)
-MG CD2 luc is the second model (MYC + GFI1 expression in CD133+ cells).
->
-
-10.1016/j.ccr.2011.12.021
-
+d
 
 ## Samples
 
@@ -330,6 +323,66 @@ iwalk(plts,
 
 ```
 
+## More detailed cell types
+
+```{r}
+relabel_clusters <- c(
+  "4" = "MS-A1",
+  "9" = "MS-A2",
+  "2" = "MS-B1",
+  "0" = "MS-C1",
+  "3" = "MS-C2",
+  "5" = "Immune",
+  "10" = "Immune",
+  "11" = "Oligo",
+  "8" = "Oligo",
+  "12" = "Astrocytes",
+  "6" = "Fibroblasts",
+  "7" = "Fibroblasts",
+  "1" = "Vasc. endothelium")
+
+so$publication_cell_types <- relabel_clusters[so$clusters]
+
+so$publication_cell_types <- factor(so$publication_cell_types,
+                                    levels = unique(relabel_clusters))
+
+p <- plot_umap(so,
+          "publication_cell_types", 
+          label_text = TRUE,
+          label_size = 4,
+          legend_title = "",
+          label_color = "black",
+          ggrepel_opts = list(force = 0.0001,
+                              point.padding = 0.01))
+p
+
+save_plot(file.path(fig_dir, "umap_shh1_cell_type_labels.pdf"),
+          p,
+          base_asp = 1.5)
+```
+
+
+```{r}
+mkrs <- get_marker_summaries(so, 
+                             "publication_cell_types",
+                             prefix = "shh_pub_cell_types",
+                     tsv_output_dir = mkrs_dir,
+                     xlsx_output_dir = tbls_dir)
+mkrs
+
+
+so_sub <- subset(so, 
+                 subset = cell_types %in% c("malignant"))
+
+mkrs <- get_marker_summaries(so_sub, 
+                             "publication_cell_types",
+                             prefix = "shh_pub_cell_types_malignant",
+                     tsv_output_dir = mkrs_dir,
+                     xlsx_output_dir = tbls_dir)
+rm(mkrs)
+```
+
+
 ## Add in Northcutt paper metamodule scores
 
 ```{r}
@@ -528,12 +581,17 @@ save_plot(file.path(fig_dir,
           ncol = 2)
 ```
 
+```{r}
+#qsave(so, file.path(obj_dir,"shh_sobj.qs"))
+#so <- qread(file.path(obj_dir,"shh_sobj.qs"))
+```
+
 ## Calculate marker gene overlap
 
 ```{r}
 library("GeneOverlap")
 
-mouse_markers <- read_tsv(file.path("markers", "mouse", "shh", "shh_malignant_cluster_markers.tsv")) %>% 
+mouse_markers <- read_tsv(file.path("markers", "mouse", "shh", "shh_pub_cell_types_malignant_cluster_markers.tsv")) %>% 
 filter(padj < 0.05) %>% 
   group_by(group) %>% 
   arrange(padj, desc(logFC), .by_group = TRUE) %>% 
@@ -543,7 +601,8 @@ filter(padj < 0.05) %>%
   map(~pull(.x, external_gene_name))
 
 human_markers <- read_tsv(file.path("markers", "shh",  "harmony_subpopulation_markers_shh.tsv")) %>% 
-  filter(padj < 0.05) %>% 
+  filter(padj < 0.05,
+         group != "SHH-X1") %>%
   group_by(group) %>% 
   arrange(padj, desc(logFC), .by_group = TRUE) %>% 
   semi_join(orthologs, by = c("feature" = "external_gene_name")) %>% 
@@ -618,7 +677,7 @@ sos <- pmap(list(
   mats, 
   list(so_h, so_sub),
   c("tumor_subpopulations_shh",
-    "clusters")),
+    "publication_cell_types")),
   function(mat, so, cluster_col) {
   tmp <- CreateSeuratObject(mat, meta.data = so@meta.data)
   Idents(tmp) <- cluster_col  
@@ -675,7 +734,7 @@ wc <- cluster_walktrap(g)
 V(g)$color <- V(g)$type
 V(g)$shape <- ifelse(V(g)$type, "circle", "rectangle")
 
-set.seed(42)
+set.seed(1)
 layout <-layout.fruchterman.reingold(g)
 
 new_cols <- ifelse(startsWith(V(g)$name, "SHH"), "white", "black")
@@ -691,7 +750,7 @@ plot(wc, g,
      edge.width= scales::rescale(E(g)$weight, c(1,5)), 
      vertex.label = ifelse(startsWith(V(g)$name, "SHH-"), 
                            str_remove(V(g)$name, "SHH-"), 
-                           str_c("M", V(g)$name)),
+                           str_remove(V(g)$name, "MS-")),
      vertex.label.family = "sans",
     vertex.label.color = ifelse(startsWith(V(g)$name, "SHH-"), "black", "white"))
 
@@ -715,7 +774,7 @@ plot(wc, g,
     edge.width= scales::rescale(E(g)$weight, c(1,5)), 
      vertex.label = ifelse(startsWith(V(g)$name, "SHH"), 
                            str_remove(V(g)$name, "SHH-"), 
-                           str_c("M", V(g)$name)),
+                           str_remove(V(g)$name, "MS-")),
      vertex.label.family = "sans",
     vertex.label.color = ifelse(startsWith(V(g)$name, "SHH"), "black", "white"))
 
