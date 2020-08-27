@@ -12,11 +12,31 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r}
-library(rmarkdown)
+library(purrr)
+library(tidyverse)
 ```
 
 ## Render all Rmarkdowns
 
 ```{r}
-render("1_preprocess.Rmd")
+rmds <- c(
+  "0_run_all.Rmd",
+  "1_preprocess.Rmd",
+  "2_split_neoplastic.Rmd",
+  "3_cnv.Rmd",
+  "4_SHH_analysis.Rmd",
+  "5_grp34_analysis.Rmd",
+  "6_immune.Rmd",
+  "7.1_shh_mouse_model_v2.Rmd",
+  "7.2_gp3_mouse_model_myc_dnp53.Rmd",
+  "7.2_gp3_mouse_model_myc_gfi1.Rmd",
+  "8_pyscenic.Rmd",
+  "9_overview.Rmd",
+  "10_gene_signatures.Rmd",
+  "11_cnv.Rmd",
+  "N_cellbrowser.Rmd")
+
+walk(rmds,
+     ~render(.x))
 ```
+

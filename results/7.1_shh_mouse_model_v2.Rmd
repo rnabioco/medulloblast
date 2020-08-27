@@ -613,7 +613,7 @@ human_markers <- read_tsv(file.path("markers", "shh",  "harmony_subpopulation_ma
 
 gom_human_mouse <- newGOM(mouse_markers, 
                        human_markers,
-                       genome.size = nrow(so))
+                       genome.size = nrow(so_sub))
 
 # extract overlaps
 pvals  <- getMatrix(gom_human_mouse, c("pval")) 
@@ -643,7 +643,7 @@ h <- Heatmap(jaccard,
         cell_fun = function(j, i, x, y, width, height, fill) {
           bin <- findInterval(pvals[i, j], c(-log10(0.01), 20, 200))
           txt <- c("*", "**", "***")[bin]
-          grid.text(txt, x, y, gp = gpar(fontsize = 10, col = "white"))
+          grid.text(txt, x, y, gp = gpar(fontsize = 16, col = "white"))
 })
 
 

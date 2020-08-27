@@ -202,7 +202,7 @@ make_cellbrowser(so,
 
 ```{r}
 so <- qread(file.path("objects", "gp34", "gp3_only.qs"))
-
+so$subgroup <- ifelse(so$subgroup == "GP3/4", "GP3", so$subgroup)
 so$tumor_cell_type_gp3 <- str_replace_all(so$tumor_cell_type_gp3, ",", "")
 so$tumor_cell_types_all_subgroups <-  str_replace_all(so$tumor_cell_types_all_subgroups, ",", " ")
 
@@ -369,7 +369,7 @@ make_cellbrowser(so,
 
 ```{r}
 so <- qread(file.path("objects", "immune", "immune_so.qs"))
-
+so$subgroup <- ifelse(so$subgroup == "GP3/4", "GP3", so$subgroup)
 cols_to_keep <- c(
   `genes per cell` = "nFeature_RNA",
   `UMIs per cell` = "nCount_RNA",
@@ -589,6 +589,25 @@ build_cellbrowser(datasets,
                     cbBuild_path =  "/miniconda3/envs/py37/bin/cbBuild")
 ```
 
+```{r}
+so <- qread(file.path("objects", "preprocess", "so.qs"))
+
+m <- GetAssayData(so, slot = "counts", assay = "RNA")
+# run GLM-PCA on Seurat object. 
+# Uses Poisson model by default
+# Note that data in the counts slot is used
+# We choose 10 dimensions for computational efficiency
+
+ndims <- 50
+so <- RunGLMPCA(so, 
+                features = VariableFeatures(so), 
+                L = ndims, 
+                minibatch = 'stochastic')
+pbmc3k <- FindNeighbors(pbmc3k, reduction = 'glmpca', dims = 1:ndims, verbose = FALSE)
+pbmc3k <- FindClusters(pbmc3k, verbose = FALSE)
+pbmc3k <- RunUMAP(pbmc3k, reduction = 'glmpca', dims = 1:ndims, verbose = FALSE)
+
+```
 
 
 

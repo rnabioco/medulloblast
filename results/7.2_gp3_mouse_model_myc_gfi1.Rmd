@@ -732,7 +732,7 @@ h <- Heatmap(jaccard,
         cell_fun = function(j, i, x, y, width, height, fill) {
           bin <- findInterval(pvals[i, j], c(-log10(0.01), 20, 200))
           txt <- c("*", "**", "***")[bin]
-          grid.text(txt, x, y, gp = gpar(fontsize = 10, col = "white"))
+          grid.text(txt, x, y, gp = gpar(fontsize = 16, col = "white"))
 })
 
 

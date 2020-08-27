@@ -53,6 +53,37 @@ names(sos) <- c("SHH", "GP3", "GP4")
 
 ```
 
+```{r}
+ortholog_table <- "../dbases/mouse_orthologs.tsv"
+
+if(!file.exists(ortholog_table)){
+  library(biomaRt)
+  ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
+  
+  orthologs <- getBM(mart = ensembl, 
+      attributes = c("external_gene_name",
+                     "mmusculus_homolog_associated_gene_name"))
+  
+  write_tsv(orthologs, ortholog_table)
+}
+
+orthologs <- read_tsv(ortholog_table)
+
+orthologs <- filter(orthologs,
+                            !is.na(mmusculus_homolog_associated_gene_name)) %>% 
+  group_by(external_gene_name) %>% 
+  mutate(n_orthos_h = n()) %>% 
+  group_by(mmusculus_homolog_associated_gene_name) %>% 
+  mutate(n_orthos_m = n()) %>% 
+  filter(n_orthos_h == 1, n_orthos_m == 1) %>% 
+  select(-starts_with("n_orthos")) %>% 
+  ungroup()
+
+orthologs <- mutate(orthologs, 
+                    ortho_id = str_c(external_gene_name, ":",
+                                     mmusculus_homolog_associated_gene_name))
+```
+
 ## Regenerate marker tables etc.
 
 Using the new cell type labels
@@ -289,24 +320,28 @@ var_marker_lst <- var_marker_lst[!str_detect(names(var_marker_lst),  "-X[0-9]$")
 for(i in seq_along(var_marker_lst)){
   mrks <- var_marker_lst[[i]]
   id <- names(var_marker_lst)[i]
-  so <- AddModuleScore(so, list(x = mrks), assay = "RNA", name = id, seed = 42)
+  so <- AddModuleScore(so, 
+                       list(x = mrks), 
+                       assay = "RNA", 
+                       name = id, 
+                       seed = 42)
 }
 
 # rename cols
 col_idxs <- match(str_c(make.names(names(var_marker_lst)), "1"), 
                     colnames(so@meta.data))
-colnames(so@meta.data)[col_idxs] <- str_c(names(var_marker_lst), "-signature")
+colnames(so@meta.data)[col_idxs] <- names(var_marker_lst)
 
 all_tumor_cell_expression_scores <- get_metadata(so, embedding = NULL) %>% 
-  .[, c("cell", str_c(names(var_marker_lst), "-signature"))] %>% 
+  .[, c("cell", names(var_marker_lst))] %>% 
   column_to_rownames("cell") %>% 
   as.matrix()
 
 hmap <- Heatmap(cor(all_tumor_cell_expression_scores, method = "spearman"),
          col = viridis::viridis(256),
         name = "Correlation",
-        row_names_gp = gpar(fontsize = 7),
-        column_names_gp = gpar(fontsize = 7))
+        row_names_gp = gpar(fontsize = 12),
+        column_names_gp = gpar(fontsize = 12))
 
 pdf(file.path(fig_dir, "tumor_subpopulation_scores_all_tumor_cells_cor_matrix.pdf"),
     width = 9,
@@ -586,7 +621,7 @@ human_markers <- read_tsv(file.path("markers", "GP3",  "harmony_subpopulation_ma
 
 gom_human_mouse <- newGOM(mouse_markers, 
                        human_markers,
-                       genome.size = nrow(so_sub))
+                       genome.size = nrow(nrow(sos$gp3)))
 
 # extract overlaps
 pvals  <- getMatrix(gom_human_mouse, c("pval")) 
@@ -763,36 +798,7 @@ h_so <- Reduce(function(x, y) merge(x, y), h_sos)
 rm(h_sos, so_gp3, so_gp4, so_shh)
 ```
 
-```{r}
-ortholog_table <- "../dbases/mouse_orthologs.tsv"
 
-if(!file.exists(ortholog_table)){
-  library(biomaRt)
-  ensembl <- useMart("ensembl", dataset = "hsapiens_gene_ensembl")
-  
-  orthologs <- getBM(mart = ensembl, 
-      attributes = c("external_gene_name",
-                     "mmusculus_homolog_associated_gene_name"))
-  
-  write_tsv(orthologs, ortholog_table)
-}
-
-orthologs <- read_tsv(ortholog_table)
-
-orthologs <- filter(orthologs,
-                            !is.na(mmusculus_homolog_associated_gene_name)) %>% 
-  group_by(external_gene_name) %>% 
-  mutate(n_orthos_h = n()) %>% 
-  group_by(mmusculus_homolog_associated_gene_name) %>% 
-  mutate(n_orthos_m = n()) %>% 
-  filter(n_orthos_h == 1, n_orthos_m == 1) %>% 
-  select(-starts_with("n_orthos")) %>% 
-  ungroup()
-
-orthologs <- mutate(orthologs, 
-                    ortho_id = str_c(external_gene_name, ":",
-                                     mmusculus_homolog_associated_gene_name))
-```
 
 ```{r}
 mats <- set_shared_orthologs(h_so, m_so, orthologs)
@@ -868,7 +874,7 @@ so <- RunHarmony(so,
           reduction.name = "Harmony_UMAP_3")
 
 
-so$subgroup <- factor(so$subgroup, levels = c("GP3",
+so$subgroup <- factor(so$subgroup_small, levels = c("GP3",
     "GP4",
     "SHH",
     "GP3 model (Myc-T58A/dn-Trp53)",
@@ -876,10 +882,20 @@ so$subgroup <- factor(so$subgroup, levels = c("GP3",
     "SHH model (SmoM2/Math1-Cre)"
 ))
 
+small_labels <- c("GP3" = "GP3",
+    "GP4" = "GP4",
+    "SHH" = "SHH",
+    "GP3 model (Myc-T58A/dn-Trp53)"  = "GP3 model MP",
+    "GP3 model (Myc-T58A/Gfi1)" = "GP3 model MG",
+    "SHH model (SmoM2/Math1-Cre)" = "SHH model MS"
+)
+
+so$subgroup_small <- small_labels[so$subgroup]
+so$subgroup_small  <- factor(so$subgroup_small, levels = small_labels)
 umap_types <- c("umap", "Harmony_UMAP_1", "Harmony_UMAP_2", "Harmony_UMAP_3")
 umaps <- map(umap_types,
              ~plot_feature(so, 
-                           "subgroup", 
+                           "subgroup_small", 
                            .cols = palette_OkabeIto[-4],
                            sorted = "random",
                            legend_title = "", embedding = .x) +
@@ -888,16 +904,16 @@ umaps <- map(umap_types,
 ```
 
 ```{r}
-Idents(so) <- "subgroup"
+Idents(so) <- "subgroup_small"
 
-subgroups <- unique(so$subgroup)
+subgroups <- unique(so$subgroup_small)
 reductions <- c("pca", "harmony_1", "harmony_2", "harmony_3")
 avg_h <- map(reductions, ~{
   h <- Embeddings(so, .x)
   
   avg_h <- lapply(subgroups, 
                   function(x){
-                    ids <- names(so$subgroup)[so$subgroup == x]
+                    ids <- names(so$subgroup_small)[so$subgroup_small == x]
                     h_tmp <- h[ids, ]
                     m <- colMeans(h_tmp)
                     df <- data.frame(row.names = names(m),
@@ -927,7 +943,7 @@ plts <- map2(umaps, dends, ~list(.x, .y)) %>% flatten()
 plt <- plot_grid(plotlist = plts,
                  nrow = 4, 
                  ncol = 2, 
-                 rel_widths = c(1.66, 1), 
+                 rel_widths = c(1.5, 1), 
                  labels = c("", "   PCA          ",
                             "", "Harmony (theta = 1)",
                             "", "Harmony (theta = 2)", 
@@ -935,10 +951,28 @@ plt <- plot_grid(plotlist = plts,
                  hjust = 1)
 save_plot(file.path(fig_dir,
                     "cell_type_signature_comparisons",
-                    "mouse-human-harmonized-comparison.pdf"),
+                    "mouse-human-harmonized-comparison-v2.pdf"),
           plt,
-          base_asp = 1.6,
+          base_asp = 1.3,
           nrow = 4, 
+          ncol = 2)
+
+# just plot theta 2 
+
+umaps[[3]]
+
+plt <- plot_grid(umaps[[3]], dends[[3]],
+                 nrow = 1, 
+                 ncol = 2, 
+                 rel_widths = c(1.5, 1), 
+                 labels = c("", "Harmony (theta = 2)"),
+                 hjust = 1)
+save_plot(file.path(fig_dir,
+                    "cell_type_signature_comparisons",
+                    "mouse-human-harmonized-comparison-theta2.pdf"),
+          plt,
+          base_asp = 1.3,
+          nrow = 1, 
           ncol = 2)
 ```
 
