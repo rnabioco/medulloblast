@@ -20,16 +20,10 @@ library(GeneOverlap)
 library(ggrepel)
 library(RANN)
 library(ape)
-library(future)
 theme_set(theme_cowplot())
 
 
 # ----------------------------------------------------
-library(future)
-
-plan("multicore", workers = 7)
-options(future.globals.maxSize = 2 * 1024 ^ 3)
-
 proj_dir <- here()
 data_dir <- file.path(proj_dir, "data", "cellranger", "results")
 doc_dir <- file.path(proj_dir, "docs")
