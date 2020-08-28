@@ -3,6 +3,8 @@
 .RData
 .Ruserdata
 *.pdf
+*.ai
+*.pptx
 *.xlsx
 *.tsv
 *.rds

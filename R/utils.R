@@ -4,7 +4,7 @@ library(tidyverse)
 library(Seurat) #v3
 library(readxl)
 library(here)
-library(scbp)
+library(scbp) # install_github("rnabioco/scbp")
 library(presto)
 library(qs)
 theme_set(theme_cowplot())
