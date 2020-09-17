@@ -324,7 +324,7 @@ Assign cell_types with clustifyr
 ```{r}
 library(clustifyr)
 library(ComplexHeatmap)
-tm_average <- readRDS("/Users/kriemo/Projects/sc_repos/vanotterloo/data/tabula_muris/TM_avg_expr.rds")
+tm_average <- readRDS(file.path(project_dir, "dbases", "TM_avg_expr.rds"))
 
 mdata <- get_metadata(so)
 
@@ -1351,7 +1351,7 @@ Assign cell_types with clustifyr
 ```{r}
 library(clustifyr)
 library(ComplexHeatmap)
-tm_average <- readRDS("/Users/kriemo/Projects/sc_repos/vanotterloo/data/tabula_muris/TM_avg_expr.rds")
+tm_average <-  readRDS(file.path(project_dir, "dbases", "TM_avg_expr.rds"))
 
 mdata <- get_metadata(so)
 
