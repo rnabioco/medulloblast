@@ -586,28 +586,10 @@ datasets <- file.path(cb_outdir, datasets, "cellbrowser.conf")
 
 build_cellbrowser(datasets, 
                     outdir = file.path(cb_outdir, "mblast"),
-                    cbBuild_path =  "/miniconda3/envs/py37/bin/cbBuild")
+                    cbBuild_path =  "/miniconda3/bin/cbBuild")
 ```
 
-```{r}
-so <- qread(file.path("objects", "preprocess", "so.qs"))
 
-m <- GetAssayData(so, slot = "counts", assay = "RNA")
-# run GLM-PCA on Seurat object. 
-# Uses Poisson model by default
-# Note that data in the counts slot is used
-# We choose 10 dimensions for computational efficiency
-
-ndims <- 50
-so <- RunGLMPCA(so, 
-                features = VariableFeatures(so), 
-                L = ndims, 
-                minibatch = 'stochastic')
-pbmc3k <- FindNeighbors(pbmc3k, reduction = 'glmpca', dims = 1:ndims, verbose = FALSE)
-pbmc3k <- FindClusters(pbmc3k, verbose = FALSE)
-pbmc3k <- RunUMAP(pbmc3k, reduction = 'glmpca', dims = 1:ndims, verbose = FALSE)
-
-```
 
 
 
