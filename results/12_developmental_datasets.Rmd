@@ -1,0 +1,143 @@
+---
+title: "Compare to developmental dataset"
+author: "Kent Riemondy RBI"
+date: "`r Sys.Date()`"
+knit: (function(inputFile, encoding) {
+  rmarkdown::render(inputFile, encoding = encoding, output_dir = "html") })
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_collapsed: false
+    theme: cosmo
+    highlight: tango
+    fig_caption: true
+    code_folding: hide
+    df_print: paged
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libs}
+source(here::here("R/utils.R"))
+library(ComplexHeatmap)
+library(presto)
+library(openxlsx)
+library(gprofiler2)
+library(data.table)
+library(minfi)
+library(conumee)
+rmd_dir <- "developmental_comparison"
+
+fig_dir <- file.path(fig_dir, rmd_dir)
+
+walk(fig_dir,
+     dir.create, 
+     showWarnings = FALSE)
+```
+
+```{r}
+
+so_fns <- file.path(obj_dir, c(
+  file.path("shh", "shh.qs"),
+  file.path("gp34", "gp3_only.qs"),
+  file.path("gp34", "gp4_only.qs")))
+                    
+clusters <- c(
+  "tumor_subpopulations_shh",
+  "tumor_subpopulations_gp3",
+  "tumor_subpopulations_gp4"
+)
+
+sos <- map(so_fns, 
+            ~qread(.x, nthreads = 4, use_alt_rep = FALSE))
+
+names(sos) <- c("SHH", "GP3", "GP4")
+
+```
+
+## Compare cluster markers to cell atlas {.tabset}
+
+The traditional way of assigning cell types to clusters is by manual inspection by an expert with familiarity with the tissue/sample/system. This is laborious, error prone, and becomingly increasingly unnecessary as the # of single cell datasets has increased.
+
+The [primary cell atlas](http://biogps.org/dataset/BDS_00013/primary-cell-atlas/) will be used as a reference dataset to help define cell types from the cluster markers. Additionally a single cell rna-seq  [dataset](http://science.sciencemag.org/content/358/6368/1318.long) of human cortex development will be queried ("cortex-development"). As well as a dataset of [developing human cerebellum](https://www.biorxiv.org/content/10.1101/2020.06.30.174391v1) ("cerebellum-development"). 
+
+We will use the `clustifyr` package written by RBI fellow Rui Fu, which will correlate the gene signatures in each cluster to the reference data.
+
+### Refined clusters
+
+First the refined clustering from the unaligned data will be compared. 
+
+```{r, fig.width=12, fig.height=16, message=FALSE, warning=FALSE, fig.cap="Heatmap showing the correlation coefficients of each cluster against various cell types. The cell types from the human brain datasets are suffixed with cortex-development or cerebellum-development, otherwise the cells are from the primary cell atlas."}
+library(clustifyr)
+library(clustifyrdatahub)
+ref_primary_cell_atlas <- readRDS("~/Projects/mulcahy-levy//dbases/human_primary_cell_atlas.rds")
+ref_cerebellar <- readRDS("~/Projects/sc_repos/medulloblast/docs/aldinger_et_al_biorxiv_2020/avg_expr.rds")
+ref_cortex_dev_local <- ref_cortex_dev() 
+
+colnames(ref_cortex_dev_local) <- str_c(colnames(ref_cortex_dev_local),
+                                        ":cortex-development")
+colnames(ref_cerebellar) <- str_replace(colnames(ref_cerebellar), " ", "-") %>%
+  str_remove("[0-9]{2}-") %>% 
+  str_c(":cerebellar-development")
+
+to_keep <- intersect(rownames(ref_primary_cell_atlas),
+                     rownames(ref_cortex_dev_local)) %>% 
+  intersect(rownames(ref_cerebellar))
+          
+ref <- cbind(ref_primary_cell_atlas[to_keep, ],
+             ref_cortex_dev_local[to_keep, ],
+             ref_cerebellar[to_keep, ])
+```
+
+```{r}
+map2(sos, clusters,
+    function(so, cluster){
+res <- clustify(so,
+                ref_mat = ref,
+                cluster_col = cluster, 
+                obj_out = FALSE)
+
+hmap_mat <- t(res) %>% 
+  .[rowSums(. > 0.5) > 0, ]
+
+hmap <- Heatmap(hmap_mat,
+        name = "Spearman\ncorrelation",
+        row_title = "Reference cell types",
+        row_names_gp = gpar(fontsize = 6),
+        column_title = cluster,
+        column_title_side = "bottom",
+        col = viridis::magma(256))
+
+pdf(file.path(fig_dir, str_c(cluster, "_clustifyr_cell_type.pdf")),
+    width = 9,
+    height = 16)
+draw(hmap)
+null <- dev.off()
+
+hmap
+
+calls <- cor_to_call(res, threshold = 0.5) %>% 
+  dplyr::select(cluster, 
+         called_cell_type = type, 
+         correlation_value = r)
+
+calls
+})
+```
+
+### unaligned data
+```{r}
+so$refined_cell_type <- left_join(get_metadata(so), 
+          unaligned_calls,
+          by = c("refined_clusters" = "cluster")) %>% 
+  select(cell, called_cell_type) %>% 
+  pull(called_cell_type)
+
+plot_umap(so, c("refined_cell_type", "UPN")) %>% 
+  plot_grid(plotlist = ., nrow = 1, ncol = 2)
+```
+

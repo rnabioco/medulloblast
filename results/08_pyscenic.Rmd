@@ -61,49 +61,8 @@ shh_data <- shh_data[, Cells(so)]
 so[["TF"]] <- CreateAssayObject(data = shh_data)
 
 Idents(so) <- "coarse_clusters_shh_harmony"
-DefaultAssay(so) <- "TF"
-
-so_tf_markers <- wilcoxauc(so,
-                           group_by = "coarse_clusters_shh_harmony", 
-                           seurat_assay = "TF") %>% 
-  filter(logFC > 0, 
-         padj < 0.05) %>% 
-  group_by(group) %>% 
-  arrange(padj, desc(logFC))
-
-write_tsv(so_tf_markers, file.path(tbls_dir, "shh", "shh_tf_activities.tsv"))
-
-write_markers_xlsx(split(so_tf_markers, so_tf_markers$group),
-                   path = file.path(tbls_dir,"shh","shh_tf_activities.xlsx"),
-                   description_string = "Transcription factor regulons derived from PyScenic that are significantly enriched in each cluster")
-
-topx <- so_tf_markers %>% 
-  group_by(group) %>% 
-  arrange(padj, desc(logFC), .by_group = TRUE) %>% 
-  slice(1:5)
-
-so <- ScaleData(so)
-
-p <- DoHeatmap(so, 
-               group.colors = discrete_palette_default,
-        features = unique(topx$feature),
-        group.by = "coarse_clusters_shh_harmony",
-        angle = 0, 
-        raster = FALSE, 
-        draw.lines = TRUE)
-
-p <- p +
-  scale_fill_gradientn(colours = viridis::viridis(256),
-                       name = "Regulon AUC\nZ-scores")
-
-save_plot(file.path(fig_dir, "shh", "heatmap_tfs_shh.pdf"), 
-          p,
-          base_asp = 2,
-          base_height = 8)
-
 ```
 
-resave 
 
 ```{r, eval = FALSE}
 DefaultAssay(so) <- "RNA"
@@ -196,55 +155,12 @@ grp34_data <- tf_dat$gp34 %>%
 grp34_data <- grp34_data[, Cells(so)]
 so[["TF"]] <- CreateAssayObject(data = grp34_data)
 
-Idents(so) <- "coarse_clusters_gp3_harmony"
-DefaultAssay(so) <- "TF"
-
-so_tf_markers <- wilcoxauc(so,
-                           group_by = "coarse_clusters_gp3_harmony", 
-                           seurat_assay = "TF") %>% 
-  filter(logFC > 0, 
-         padj < 0.05) %>% 
-  group_by(group) %>% 
-  arrange(padj, desc(logFC))
-
-write_tsv(so_tf_markers, file.path(tbls_dir, "gp3", "gp3_tf_activities.tsv"))
-
-write_markers_xlsx(split(so_tf_markers, so_tf_markers$group),
-                   path = file.path(tbls_dir, "gp3", "gp3_tf_activities.xlsx"),
-                   description_string = "Transcription factor regulons derived from PyScenic that are significantly enriched in each cluster")
-
-topx <- so_tf_markers %>% 
-  group_by(group) %>% 
-  arrange(padj, desc(logFC), .by_group = TRUE) %>% 
-  slice(1:5)
-
-so <- ScaleData(so)
-
-p <- DoHeatmap(so, 
-               group.colors = discrete_palette_default,
-        features = unique(topx$feature),
-        group.by = "coarse_clusters_gp3_harmony",
-        angle = 0,
-        raster = FALSE, 
-        draw.lines = TRUE)
-
-p <- p +
-  scale_fill_gradientn(colours = viridis::viridis(256),
-                       name = "Regulon AUC\nZ-scores")
-
-save_plot(file.path(fig_dir, "gp3", "heatmap_tfs_gp3.pdf"), 
-          p,
-          base_asp = 2,
-          base_height = 8)
-p
 ```
 
 ```{r, eval = FALSE}
 DefaultAssay(so) <- "RNA"
 qsave(so, file.path(obj_dir, "gp34", "gp3_only.qs"), nthreads = 4)
 ```
-
-
 
 ## Group 4 only
 
@@ -264,55 +180,12 @@ grp34_data <- tf_dat$gp4_only %>%
 
 grp34_data <- grp34_data[, Cells(so)]
 so[["TF"]] <- CreateAssayObject(data = grp34_data)
-
-Idents(so) <- "coarse_clusters_gp4_harmony"
-DefaultAssay(so) <- "TF"
-
-so_tf_markers <- wilcoxauc(so,
-                           group_by = "coarse_clusters_gp4_harmony", 
-                           seurat_assay = "TF") %>% 
-  filter(logFC > 0, 
-         padj < 0.05) %>% 
-  group_by(group) %>% 
-  arrange(padj, desc(logFC))
-
-write_tsv(so_tf_markers, file.path(tbls_dir, "gp4", "gp4_tf_activities.tsv"))
-
-write_markers_xlsx(split(so_tf_markers, so_tf_markers$group),
-                   path = file.path(tbls_dir, "gp4", "gp4_tf_activities.xlsx"),
-                   description_string = "Transcription factor regulons derived from PyScenic that are significantly enriched in each cluster")
-
-topx <- so_tf_markers %>% 
-  group_by(group) %>% 
-  arrange(padj, desc(logFC), .by_group = TRUE) %>% 
-  slice(1:5)
-
-so <- ScaleData(so)
-
-p <- DoHeatmap(so, 
-               group.colors = discrete_palette_default,
-        features = unique(topx$feature),
-        group.by = "coarse_clusters_gp4_harmony",
-        angle = 0,
-        raster = FALSE, 
-        draw.lines = TRUE)
-
-p <- p +
-  scale_fill_gradientn(colours = viridis::viridis(256),
-                       name = "Regulon AUC\nZ-scores")
-
-save_plot(file.path(fig_dir, "gp4", "heatmap_tfs_gp4.pdf"), 
-          p,
-          base_asp = 2,
-          base_height = 8)
-
 ```
 
 ```{r, eval = FALSE}
 DefaultAssay(so) <- "RNA"
 qsave(so, file.path(obj_dir, "gp34", "gp4_only.qs"), nthreads = 4)
 ```
-
 
 ## Immune
 
@@ -375,3 +248,5 @@ save_plot(file.path(fig_dir, "immune", "heatmap_tfs_immune.pdf"),
 DefaultAssay(so) <- "RNA"
 qsave(so, file.path(obj_dir, "immune", "immune_so.qs"), nthreads = 4)
 ```
+
+

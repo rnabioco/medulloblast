@@ -48,7 +48,7 @@ seed_value <- 20200204
 mdata <- read_excel(file.path(doc_dir, 
                                    "MED scRNAseq batch and annotations 5.8.19.xlsx")) %>% 
   filter(subgroup != "LGG") %>% 
-  select(-subgroup)
+  dplyr::select(-subgroup)
 
 mdata_updated <- read_excel(file.path(doc_dir, 
                                    "MED scRNAseq batch and annotations no TBD 5.28.19.xlsx")) %>% 

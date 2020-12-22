@@ -22,7 +22,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r libs}
-source(here::here("/R/utils.R"))
+source(here::here("R/utils.R"))
 library(ComplexHeatmap)
 library(presto)
 library(openxlsx)
@@ -76,7 +76,7 @@ orthologs <- filter(orthologs,
   group_by(mmusculus_homolog_associated_gene_name) %>% 
   mutate(n_orthos_m = n()) %>% 
   filter(n_orthos_h == 1, n_orthos_m == 1) %>% 
-  select(-starts_with("n_orthos")) %>% 
+  dplyr::select(-starts_with("n_orthos")) %>% 
   ungroup()
 
 orthologs <- mutate(orthologs, 
@@ -1565,4 +1565,193 @@ save_plot(file.path(fig_dir, "shh_cell_type_umap.pdf"),
           p,
           base_asp = 2.5)
 ```
+
+## Summary files/heatmaps
+
+```{r}
+
+so_fns <- file.path(obj_dir, c(
+  file.path("shh", "shh.qs"),
+  file.path("gp34", "gp3_only.qs"),
+  file.path("gp34", "gp4_only.qs")))
+                    
+clusters <- c(
+  "tumor_subpopulations_shh",
+  "tumor_subpopulations_gp3",
+  "tumor_subpopulations_gp4"
+)
+
+sos <- map(so_fns, 
+            ~qread(.x, nthreads = 4, use_alt_rep = FALSE))
+
+names(sos) <- c("SHH", "GP3", "GP4")
+
+sos <- pmap(
+  list(sos,
+    names(sos),
+    clusters),
+            function(so, id, cluster){
+              # drop the excluded populations
+              to_keep <- rownames(so@meta.data)[!str_detect(so[[cluster]][,1], "-X[0-9]$")]
+              so <- subset(so, cells = to_keep)
+              so$tumor_cell_type <- so[[cluster]][,1]
+              so
+            })
+```
+
+### TF data
+ 
+Make heatmaps of top TFs per subpopulation
+
+```{r}
+iwalk(sos,
+     function(so, id){
+       DefaultAssay(so) <- "TF"
+       uid <- id
+       lid <- str_to_lower(id)
+       so_tf_markers <- read_tsv(file.path("tables",
+                                           lid,
+                                           str_c("subpopulation_tf_activities_", uid, ".tsv")))
+       
+       topx <- so_tf_markers %>% 
+         group_by(group) %>% 
+         arrange(padj, desc(logFC), .by_group = TRUE) %>% 
+         slice(1:5)
+       
+       so <- ScaleData(so)
+       
+       p <- DoHeatmap(so, 
+                      group.colors = discrete_palette_default,
+                      features = unique(topx$feature),
+                      group.by = str_c("tumor_subpopulations_", lid),
+                      angle = 45,
+                      raster = FALSE, 
+                      draw.lines = TRUE)
+       
+       p <- p +
+         scale_fill_gradientn(colours = viridis::viridis(256),
+                              name = "Regulon AUC\nZ-scores")
+       
+       save_plot(file.path(fig_dir, str_c("heatmap_tfs_",
+                                 lid, 
+                                 ".pdf")), 
+                           p,
+                           base_asp = 2,
+                           base_height = 8)
+     })
+
+```
+
+Make single spreadsheet of TF markers per subpopulation
+
+```{r}
+dir.create(file.path("tables", "subpopulation_summaries"), showWarnings = FALSE)
+sgs <- c("SHH", "GP3", "GP4")
+all_tumor_tf_dat  <- map_dfr(sgs, 
+    ~read_tsv(file.path("tables", 
+                        .x,  
+                        str_c("subpopulation_tf_activities_", .x, ".tsv")))) %>%
+      split(., .$group)
+
+write_markers_xlsx(all_tumor_tf_dat,  
+                   path = file.path(tbls_dir, "subpopulation_summaries","subpopulation_TF_activities.xlsx"),
+                   description_string = "Transcription factor regulons derived from PyScenic that are significantly enriched in each tumor subpopulation")
+                   
+```
+
+
+### Go-term data
+ 
+Make heatmaps of top Goterms per subpopulation
+
+```{r}
+iwalk(sos,
+     function(so, id){
+       
+       so_markers <- read_tsv(file.path("markers",
+                                        id, 
+                                        str_c("harmony_subpopulation_markers_", id, ".tsv"))) %>% 
+         filter(!str_detect(group, "-X[0-9]$"))
+       
+       # Go terms using top 500 markers 
+       mkrs <- so_markers %>% 
+         group_by(group) %>% 
+         slice(1:500)  
+    
+    mkrs_split <- split(mkrs, mkrs$group) %>% 
+      map(~pull(.x, feature))
+    
+    go_res <- gost(mkrs_split, 
+                   ordered_query = TRUE,
+                   significant = FALSE,
+                   sources = c("GO", 
+                               "KEGG", 
+                               "REAC", 
+                               "TF"))
+    
+    saveRDS(go_res, file.path(go_dir, str_c(id, "_all_go_terms.rds")))
+    
+    walk(c("GO:BP", "KEGG", "REAC"),
+         ~{
+           go_mat <- go_res$result %>% 
+             filter(source == .x) %>% 
+             dplyr::select(query, p_value, term_name) %>% 
+             pivot_wider(names_from = query, values_from = p_value) %>% 
+             column_to_rownames("term_name") %>% 
+             as.matrix() 
+           # set terms that are NA to 1
+           go_mat[is.na(go_mat)] <- 1
+           go_mat <- -log10(go_mat)
+           
+           top_terms <- go_res$result %>% 
+             filter(source == .x) %>% 
+             group_by(query) %>% 
+             arrange(p_value, .by_group = TRUE) %>% 
+             slice(1:5) %>% 
+             pull(term_name) %>% 
+             unique()
+           row_go_labels <- rownames(go_mat[top_terms, ]) %>% 
+             str_split(" ") %>% 
+             map_chr(~str_c(.x[1:min(length(.x), 10)], collapse = " ")) %>% 
+             str_wrap(, 50)
+           hmap <- Heatmap(go_mat[top_terms, ], 
+                           name = "-log(10) pvalue", 
+                           col = viridis::viridis(256),
+                           column_order = unique(go_res$result$query),
+                           cluster_rows= FALSE,
+                           row_names_gp = gpar(fontsize = 12),
+                           row_names_side = "left",
+                           row_labels = row_go_labels,
+                           row_names_max_width = max_text_width(row_go_labels, 
+                                                                gp = gpar(fontsize = 12)),
+                           column_names_side = "top")
+           pdf(file.path("figs", id, 
+                         str_c("heatmap_goterms_", 
+                               str_replace(.x, ":", "_"),
+                               "_",
+                               id, 
+                               ".pdf")),
+               width = 9,
+               height = 7)
+             draw(hmap)
+           null <- dev.off()
+         })
+   
+     })
+
+```
+
+Make single spreadsheet of TF markers per subpopulation
+
+```{r}
+map_dfr(names(sos), ~readRDS(file.path(go_dir, str_c(.x, "_all_go_terms.rds"))) %>% 
+      .$result %>% 
+      filter(p_value < 0.05) %>% 
+  dplyr::select(-significant)) %>% 
+  split(., .$query) %>% 
+  openxlsx::write.xlsx(., 
+                       file.path("tables", "subpopulation_summaries","subpopulation_goterm_enrichments.xlsx"))
+                   
+```
+
 
