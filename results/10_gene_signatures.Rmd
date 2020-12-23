@@ -1754,4 +1754,65 @@ map_dfr(names(sos), ~readRDS(file.path(go_dir, str_c(.x, "_all_go_terms.rds"))) 
                    
 ```
 
+Make heatmap highlighting neuronal differentation related pathways
 
+```{r}
+go_res <- map(names(sos), ~readRDS(file.path(go_dir, str_c(.x, "_all_go_terms.rds"))))
+names(go_res) <- names(sos)
+
+# top terms containing "neuron" or "nervous" from SHH-C2 
+to_plot <- c("nervous system development",
+             "neuron development",
+             "neuron differentiation",
+             "generation of neurons",
+             "neuron projection development",
+             "neuron projection morphogenesis",
+             "cell morphogenesis involved in neuron differentiation",
+             "regulation of nervous system development",
+             "regulation of neuron differentiation",
+             "regulation of neuron projection development")
+
+
+
+hmaps <- imap(go_res, ~{
+  go_mat <- .x$result %>% 
+    filter(source == "GO:BP",
+           term_name %in% to_plot) %>% 
+    dplyr::select(query, p_value, term_name) %>% 
+    pivot_wider(names_from = query, values_from = p_value) %>% 
+    column_to_rownames("term_name") %>% 
+    as.matrix() 
+  # set terms that are NA to 1
+  go_mat[is.na(go_mat)] <- 1
+  go_mat <- -log10(go_mat)
+  
+  
+  row_go_labels <- rownames(go_mat) %>% 
+    str_split(" ") %>% 
+    map_chr(~str_c(.x[1:min(length(.x), 10)], collapse = " ")) %>% 
+    str_wrap(, 50)
+  hmap <- Heatmap(go_mat, 
+                  name = "-log(10) pvalue", 
+                  col = viridis::viridis(256),
+                  column_order = unique(.x$result$query),
+                  cluster_rows = TRUE,
+                  show_row_dend = FALSE,
+                  row_names_gp = gpar(fontsize = 12),
+                  row_names_side = "left",
+                  row_labels = row_go_labels,
+                  row_names_max_width = max_text_width(row_go_labels, 
+                                                       gp = gpar(fontsize = 12)),
+                  column_names_side = "top")
+  pdf(file.path("figs", .y, 
+                str_c("heatmap_neuron_development_goterms_", 
+                      .y, 
+                      ".pdf")),
+      width = 8,
+      height = 5)
+  draw(hmap)
+  null <- dev.off()
+  
+  hmap
+})
+
+```

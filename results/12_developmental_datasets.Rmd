@@ -28,8 +28,7 @@ library(presto)
 library(openxlsx)
 library(gprofiler2)
 library(data.table)
-library(minfi)
-library(conumee)
+
 rmd_dir <- "developmental_comparison"
 
 fig_dir <- file.path(fig_dir, rmd_dir)
@@ -74,23 +73,25 @@ First the refined clustering from the unaligned data will be compared.
 ```{r, fig.width=12, fig.height=16, message=FALSE, warning=FALSE, fig.cap="Heatmap showing the correlation coefficients of each cluster against various cell types. The cell types from the human brain datasets are suffixed with cortex-development or cerebellum-development, otherwise the cells are from the primary cell atlas."}
 library(clustifyr)
 library(clustifyrdatahub)
-ref_primary_cell_atlas <- readRDS("~/Projects/mulcahy-levy//dbases/human_primary_cell_atlas.rds")
+#ref_primary_cell_atlas <- readRDS("~/Projects/mulcahy-levy//dbases/human_primary_cell_atlas.rds")
 ref_cerebellar <- readRDS("~/Projects/sc_repos/medulloblast/docs/aldinger_et_al_biorxiv_2020/avg_expr.rds")
-ref_cortex_dev_local <- ref_cortex_dev() 
+#ref_cortex_dev_local <- ref_cortex_dev() 
 
-colnames(ref_cortex_dev_local) <- str_c(colnames(ref_cortex_dev_local),
-                                        ":cortex-development")
+#colnames(ref_cortex_dev_local) <- str_c(colnames(ref_cortex_dev_local),
+ #                                       ":cortex-development")
 colnames(ref_cerebellar) <- str_replace(colnames(ref_cerebellar), " ", "-") %>%
-  str_remove("[0-9]{2}-") %>% 
-  str_c(":cerebellar-development")
+  str_remove("[0-9]{2}-")  
+#  str_c(":cerebellar-development")
 
-to_keep <- intersect(rownames(ref_primary_cell_atlas),
-                     rownames(ref_cortex_dev_local)) %>% 
-  intersect(rownames(ref_cerebellar))
-          
-ref <- cbind(ref_primary_cell_atlas[to_keep, ],
-             ref_cortex_dev_local[to_keep, ],
-             ref_cerebellar[to_keep, ])
+# to_keep <- intersect(rownames(ref_primary_cell_atlas),
+#                      rownames(ref_cortex_dev_local)) %>% 
+#   intersect(rownames(ref_cerebellar))
+#           
+# ref <- cbind(ref_primary_cell_atlas[to_keep, ],
+#              ref_cortex_dev_local[to_keep, ],
+#              ref_cerebellar[to_keep, ])
+
+ref <- ref_cerebellar
 ```
 
 ```{r}
@@ -102,19 +103,19 @@ res <- clustify(so,
                 obj_out = FALSE)
 
 hmap_mat <- t(res) %>% 
-  .[rowSums(. > 0.5) > 0, ]
+  .[rowSums(. > 0.5) > 0, ] %>% 
+  .[, !str_detect(colnames(.), "-X")]
 
 hmap <- Heatmap(hmap_mat,
         name = "Spearman\ncorrelation",
-        row_title = "Reference cell types",
-        row_names_gp = gpar(fontsize = 6),
-        column_title = cluster,
+        row_title = "Aldinger et al cerebellar cell types",
+        column_title = "Tumor subpopulations",
         column_title_side = "bottom",
         col = viridis::magma(256))
 
 pdf(file.path(fig_dir, str_c(cluster, "_clustifyr_cell_type.pdf")),
-    width = 9,
-    height = 16)
+    width = 7,
+    height = 7)
 draw(hmap)
 null <- dev.off()
 
@@ -126,6 +127,72 @@ calls <- cor_to_call(res, threshold = 0.5) %>%
          correlation_value = r)
 
 calls
+})
+```
+
+
+```{r}
+map2(sos, clusters,
+    function(so, cluster){
+q_avg <- average_clusters(so@assays$RNA@data,
+                          so@meta.data,
+                          cluster_col = cluster)
+genes_to_use <- intersect(VariableFeatures(so), rownames(ref))
+q_avg <- q_avg[genes_to_use, ]
+ref <- ref[genes_to_use, ]
+r_vals <- cor(q_avg, ref, method = "spearman")
+pvals <- matrix(0L,
+                nrow = ncol(q_avg),
+                ncol = ncol(ref), dimnames = list(colnames(q_avg),
+                                                  colnames(ref)))
+for(i in seq_along(colnames(q_avg))){
+  for(j in seq_along(colnames(ref))){
+    pvals[i, j] <- cor.test(q_avg[, i], ref[, j], method = "spearman")$p.value
+  }
+}
+
+pvals <-  pvals[, !str_detect(colnames(pvals), "-X")]
+pvals <- matrix(p.adjust(pvals), 
+                nrow = nrow(pvals),
+                ncol = ncol(pvals),
+                dimnames = list(rownames(pvals),
+                                colnames(pvals)))
+clip_val <- 1e-300
+
+pvals[pvals < clip_val] <- clip_val  
+pvals <- -log10(pvals) %>% 
+  t() 
+
+r_vals <- t(r_vals) %>% 
+  .[rowSums(. > 0.5) > 0, ] %>% 
+  .[, !str_detect(colnames(.), "-X")]
+
+hmap <- Heatmap(r_vals,
+        name = "Spearman\ncorrelation",
+        row_title = "Aldinger et al cerebellar cell types",
+        column_title = "Tumor subpopulations",
+        column_title_side = "bottom",
+        col = viridis::magma(256),
+        cell_fun = function(j, i, x, y, width, height, fill) {
+          bin <- findInterval(pvals[i, j], c(30, 100, 300))
+          txt <- c("*", "**", "***")[bin]
+          grid.text(txt, x, y, gp = gpar(fontsize = 16, col = "grey"))
+})
+
+lgd_list <-  list(
+    Legend(labels = c("*** < 1e-300",
+                      "** < 1e-100",
+                      "* < 1e-30"), 
+           title = "Adj. p.val")
+)
+draw(hmap, heatmap_legend_list = lgd_list)
+
+pdf(file.path(fig_dir, str_c(cluster, "_clustifyr_cell_type_pvalues.pdf")),
+    width = 7,
+    height = 7)
+draw(hmap, heatmap_legend_list = lgd_list)
+null <- dev.off()
+
 })
 ```
 
