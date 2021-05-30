@@ -17,7 +17,7 @@ output:
 ---
 
 ```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
-source(here::here("/R/utils.R"))
+source(here::here("R/utils.R"))
 # rmd_dir <- "preprocess"
 # 
 # overview_fig_dir <- file.path(fig_dir, "overview")
@@ -289,6 +289,18 @@ p
 run on server per subgroup. Consider replotting heatmaps with better visualizations. 
 
 See [11_cnv.Rmd](11_cnv.Rmd)
+
+## Cell counts
+
+```{r}
+get_metadata(so) %>% 
+  count(UPN, subgroup_v2, coarse_cell_type) %>% 
+  rename(subgroup = subgroup_v2) %>% 
+  pivot_wider(names_from = "coarse_cell_type",
+              values_from = "n", 
+              values_fill = 0L) %>% 
+  write_csv(., file.path(tbls_dir, "preprocess", "cell_counts_coarse_cell_type.csv"))
+```
 
 # All neoplastic 
 ## Subtypes based on Cavalli paper
@@ -567,15 +579,19 @@ p <- plot_harmony(so_sub,
                   pt_size = 0.2,
                   label_text = TRUE,
                   label_color = "black",
-                  ggrepel_opts = list(size = 8, force = 0.2)) +
+                  ggrepel_opts = list(size = 8, force = 0.01)) +
   theme(legend.position = "none")
 
 p
 
-save_plot(file.path(shh_fig_dir, "umap_shh_harmony_overview_simple.pdf"),
+save_plot(file.path(shh_fig_dir, "umap_shh_harmony_overview_simple_v2.pdf"),
           p, 
           base_height = 6,
           base_asp = 1.2)
+```
+```{r}
+ plot_harmony(so_sub,
+                  "tumor_subpopulations_shh")
 ```
 
 ### harmony cluster markers

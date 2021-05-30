@@ -17,7 +17,7 @@ output:
 ---
 
 ```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
-source(here::here("/R/utils.R"))
+source(here::here("R/utils.R"))
 
 rmd_dir <- file.path("mouse", "shh")
 

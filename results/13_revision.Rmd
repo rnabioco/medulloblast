@@ -1,0 +1,603 @@
+---
+title: "Revision Figures"
+author: "Kent Riemondy RBI"
+date: "`r Sys.Date()`"
+knit: (function(inputFile, encoding) {
+  rmarkdown::render(inputFile, encoding = encoding, output_dir = "html") })
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_collapsed: false
+    theme: cosmo
+    highlight: tango
+    fig_caption: true
+    code_folding: hide
+    df_print: paged
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+```{r libs}
+source(here::here("R/utils.R"))
+library(ComplexHeatmap)
+library(readxl)
+library(GeneOverlap)
+
+fig_dir <- file.path(fig_dir, "revision")
+dir.create(fig_dir, showWarnings = FALSE)
+```
+
+
+```{r}
+
+so_fns <- file.path(obj_dir, c(
+  file.path("shh", "shh.qs"),
+  file.path("gp34", "gp3_only.qs"),
+  file.path("gp34", "gp4_only.qs")))
+                    
+clusters <- c(
+  "tumor_subpopulations_shh",
+  "tumor_subpopulations_gp3",
+  "tumor_subpopulations_gp4"
+)
+
+sos <- map(so_fns, 
+            ~qread(.x, nthreads = 4, use_alt_rep = FALSE))
+
+names(sos) <- c("SHH", "GP3", "GP4")
+
+n_markers <- 200
+```
+
+```{r}
+vladoiu_clusters <- "../docs/vladoiu_table_s4.xlsx"
+
+if(!file.exists(vladoiu_clusters)){
+  download.file("https://static-content.springer.com/esm/art%3A10.1038%2Fs41586-019-1158-7/MediaObjects/41586_2019_1158_MOESM5_ESM.xlsx",
+                vladoiu_clusters)
+  
+  # note that the header in the G4-4 tab is partially duplicated, 
+  # for simplicity this duplicated header was hand deleted.
+}
+library(readxl)
+
+col_names = c("rowids",
+              "p_val",
+              "avg_logFC",
+              "pct.1",
+              "pct.2",
+              "p_val_adj",
+              "cluster",
+              "gene",
+              "Annotations")
+
+sheets <- excel_sheets(vladoiu_clusters) %>% str_subset("SHH|G3|G4")
+vladoiu_cluster_markers <- map(sheets, 
+                            ~read_excel(vladoiu_clusters, 
+                                        skip = 1, 
+                                        col_names = col_names, 
+                                        guess_max = 1e6,
+                                        sheet =  .x) %>% 
+                              mutate(across(p_val:p_val_adj, as.numeric)))
+                            
+names(vladoiu_cluster_markers) <- sheets                            
+vladoiu_cluster_markers <- bind_rows(vladoiu_cluster_markers, .id = "tumor_id")
+
+tumor_clusters <- filter(vladoiu_cluster_markers,
+                         !is.na(Annotations), 
+                         Annotations == "Tumour cells") %>% 
+  dplyr::select(tumor_id, cluster) %>% 
+  distinct()
+
+vladoiu_cluster_markers <- semi_join(vladoiu_cluster_markers, 
+                                     tumor_clusters,
+                                     by = c("tumor_id", "cluster")) %>% 
+  arrange(tumor_id, as.integer(cluster)) %>% 
+  mutate(cluster_group = str_c(tumor_id, "-", cluster) %>% 
+           factor(., levels = unique(.))) 
+vladoiu_mkr_list <- vladoiu_cluster_markers %>% 
+   group_by(cluster_group) %>% 
+  arrange(p_val_adj, desc(avg_logFC), .by_group = TRUE) %>% 
+  slice(1:n_markers) %>% 
+  split(., .$cluster_group) %>% 
+  map(~pull(.x, gene))
+
+```
+
+## Marker overlap 
+
+Vladoiu et al. Nature 2019. profiled a small # of SHH, GP3, and GP4 tumors. We will examine the similarities between the tumors identified in our study and those described in their publication. I've downloade their cluster markers (supplemental table S4), and will compare the top markers in each study. 
+
+
+
+### GP3 vs Vladoiu gp3
+
+```{r}
+gp3_markers <- read_tsv(file.path("markers", "GP3", "harmony_subpopulation_markers_GP3.tsv")) %>% 
+  filter(padj < 0.05,
+         !str_detect(group, "X")) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC), .by_group = TRUE) %>% 
+  slice(1:n_markers) %>% 
+  split(., .$group) %>% 
+  map(~pull(.x, feature))
+
+# only keep clusters annotated as tumor. Note that not all of these clusters are shown in their figures. 
+
+g3_clusters <- vladoiu_mkr_list[str_detect(names(vladoiu_mkr_list), "G3")]
+
+gom <- newGOM(gp3_markers, 
+              g3_clusters,
+              genome.size = nrow(sos$gp3))
+
+# extract overlaps
+pvals  <- getMatrix(gom, c("pval")) 
+pvals <- apply(pvals, 2, function(x) p.adjust(x, n = length(pvals)))
+jaccard <- getMatrix(gom, "Jaccard")
+odds <- getMatrix(gom, c("odds.ratio"))
+
+# clip really low pvals to avoid take log10 of 0)
+clip_val <- 1e-300
+  
+pvals[pvals < clip_val] <- clip_val
+pvals <- -log10(pvals)
+
+h <- Heatmap(jaccard,
+        name = "Jaccard index", 
+        col = viridis::viridis(256),
+       row_title = "GP3 subpopulations",
+        column_title = "Vladoiu et al GP3 clusters",
+        cell_fun = function(j, i, x, y, width, height, fill) {
+          bin <- findInterval(pvals[i, j], c(-log10(0.01), 20, 200))
+          txt <- c("*", "**", "***")[bin]
+          grid.text(txt, x, y, gp = gpar(fontsize = 10, col = "white"))
+}, 
+
+                    cluster_rows = FALSE,
+                    cluster_columns = FALSE)
+
+
+lgd_list <-  list(
+    Legend(labels = c("*** < 1e-200",
+                      "** < 1e-20",
+                      "* < 1e-2"), 
+           title = "Adj. p.val")
+)
+draw(h, heatmap_legend_list = lgd_list)
+
+
+pdf(file.path(fig_dir, "Marker_overlap_gp3_vladoiu_g3.pdf"),
+    width = 7,
+    height = 4)
+  draw(h, heatmap_legend_list = lgd_list)
+dev.off()
+```
+
+
+### GP4 vs Vladoiu gp4
+
+```{r}
+gp4_markers <- read_tsv(file.path("markers", "GP4", "harmony_subpopulation_markers_GP4.tsv")) %>% 
+  filter(padj < 0.05,
+         !str_detect(group, "X")) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC), .by_group = TRUE) %>% 
+  slice(1:n_markers) %>% 
+  split(., .$group) %>% 
+  map(~pull(.x, feature))
+
+# only keep clusters annotated as tumor. Note that not all of these clusters are shown in their figures. 
+g4_clusters <- vladoiu_mkr_list[str_detect(names(vladoiu_mkr_list), "G4")]
+
+gom <- newGOM(gp4_markers, 
+              g4_clusters,
+              genome.size = nrow(sos$gp4))
+
+# extract overlaps
+pvals  <- getMatrix(gom, c("pval")) 
+pvals <- apply(pvals, 2, function(x) p.adjust(x, n = length(pvals)))
+jaccard <- getMatrix(gom, "Jaccard")
+odds <- getMatrix(gom, c("odds.ratio"))
+
+# clip really low pvals to avoid take log10 of 0)
+clip_val <- 1e-300
+pvals[pvals < clip_val] <- clip_val
+pvals <- -log10(pvals)
+
+h <- Heatmap(jaccard,
+        name = "Jaccard index", 
+        col = viridis::viridis(256),
+       row_title = "GP4 subpopulations",
+        column_title = "Vladoiu et al GP4 clusters",
+        cell_fun = function(j, i, x, y, width, height, fill) {
+          bin <- findInterval(pvals[i, j], c(-log10(0.01), 20, 200))
+          txt <- c("*", "**", "***")[bin]
+          grid.text(txt, x, y, gp = gpar(fontsize = 10, col = "white"))
+}, 
+
+                    cluster_rows = FALSE,
+                    cluster_columns = FALSE)
+
+
+lgd_list <-  list(
+    Legend(labels = c("*** < 1e-200",
+                      "** < 1e-20",
+                      "* < 1e-2"), 
+           title = "Adj. p.val")
+)
+draw(h, heatmap_legend_list = lgd_list)
+
+
+pdf(file.path(fig_dir, "Marker_overlap_gp4_vladoiu_g4.pdf"),
+    width = 7,
+    height = 4)
+  draw(h, heatmap_legend_list = lgd_list)
+dev.off()
+```
+
+### SHH vs Vladoiu SHH
+
+```{r}
+shh_markers <- read_tsv(file.path("markers", "SHH", "harmony_subpopulation_markers_SHH.tsv")) %>% 
+  filter(padj < 0.05,
+         !str_detect(group, "X")) %>% 
+  group_by(group) %>% 
+  arrange(padj, desc(logFC), .by_group = TRUE) %>% 
+  slice(1:n_markers) %>% 
+  split(., .$group) %>% 
+  map(~pull(.x, feature))
+
+# only keep clusters annotated as tumor. Note that not all of these clusters are shown in their figures. 
+shh_clusters <- vladoiu_mkr_list[str_detect(names(vladoiu_mkr_list), "SHH")]
+
+gom <- newGOM(shh_markers, 
+              shh_clusters,
+              genome.size = nrow(sos$SHH))
+
+# extract overlaps
+pvals  <- getMatrix(gom, c("pval")) 
+pvals <- apply(pvals, 2, function(x) p.adjust(x, n = length(pvals)))
+jaccard <- getMatrix(gom, "Jaccard")
+odds <- getMatrix(gom, c("odds.ratio"))
+
+# clip really low pvals to avoid take log10 of 0)
+clip_val <- 1e-300
+pvals[pvals < clip_val] <- clip_val
+pvals <- -log10(pvals)
+
+h <- Heatmap(jaccard,
+        name = "Jaccard index", 
+        col = viridis::viridis(256),
+       row_title = "SHH subpopulations",
+        column_title = "Vladoiu et al SHH clusters",
+        cell_fun = function(j, i, x, y, width, height, fill) {
+          bin <- findInterval(pvals[i, j], c(-log10(0.01), 20, 200))
+          txt <- c("*", "**", "***")[bin]
+          grid.text(txt, x, y, gp = gpar(fontsize = 10, col = "white"))
+}, 
+
+                    cluster_rows = FALSE,
+                    cluster_columns = FALSE)
+
+
+lgd_list <-  list(
+    Legend(labels = c("*** < 1e-200",
+                      "** < 1e-20",
+                      "* < 1e-2"), 
+           title = "Adj. p.val")
+)
+draw(h, heatmap_legend_list = lgd_list)
+
+
+pdf(file.path(fig_dir, "Marker_overlap_shh_vladoiu_shh.pdf"),
+    width = 7,
+    height = 4)
+  draw(h, heatmap_legend_list = lgd_list)
+dev.off()
+```
+
+
+
+
+## Subclonal analysis
+
+Next, I'll try to identify potential subclones using the inferCNV data. The approach will be using `cutree` to cut the dendrograms from hierarchical clustering into subclusters. For this analysis I will cut based on a dendrogram height such that only some samples will be cut. For this I've used a height of 40 based on looking at samples with convincing subclones (934, 801, etc.). Once' I've identified subclones, these will be examined for differential expression, and overlaid on sample specific UMAPs. The expectation is that cells from different subclones will produce more discrete clusters, which may be related to different subpopulations. 
+
+Shown here are the inferCNV heatmaps from each subgroup. 
+
+### SHH cnvs
+
+
+```{r, message = FALSE, warning = FALSE, results = 'hide'}
+library(magick)
+shh_cnv <- image_read_pdf("figs/cnvs/hmap_SHH.pdf")
+```
+
+```{r}
+magick:::`knit_print.magick-image`(shh_cnv)
+```
+
+### GP3 cnvs
+
+
+```{r, message = FALSE, warning = FALSE, results = 'hide'}
+gp3_cnv <- image_read_pdf("figs/cnvs/hmap_GP3.pdf")
+```
+
+```{r}
+magick:::`knit_print.magick-image`(gp3_cnv)
+```
+
+### GP4 cnvs
+
+
+```{r, message = FALSE, warning = FALSE, results = 'hide'}
+library(magick)
+gp4_cnv <- image_read_pdf("figs/cnvs/hmap_GP4.pdf")
+```
+
+```{r}
+magick:::`knit_print.magick-image`(gp4_cnv)
+```
+
+
+
+```{r}
+read_cnv_trees <- function(fn, names_sep = "_", names_field = 1){
+  trees <- ape::read.tree(fn) 
+  ids <- map(trees, ~.x$tip.label[1]) %>% 
+    str_split(names_sep) %>% 
+    map(names_field)
+  names(trees) <- ids
+  map(trees, as.dendrogram)
+}
+
+shh_cnvs <- read_cnv_trees(file.path("inferCNV_v2",
+             "shh", "shh",  "infercnv.observations_dendrogram.txt"))
+
+# use hclustering to cluster cnvs with some filtering
+# min_prop sets the minimum prop of cells that can be in a cluster/subclone
+# i.e. if less than min_prop cells are in a cluster then the clustering is not valid
+cluster_cnvs <- function(tumor_id,
+                         ptrees,
+                         sobj,
+                         cut_height = 35,
+                         min_prop = 0.1,
+                         min_cells = 50,
+                         sample_col = "UPN") {
+  tree <- ptrees[[tumor_id]]
+  clusts <- cutree(tree, h = cut_height)
+  
+  if(!tumor_id %in% sobj@meta.data[[sample_col]]){
+    stop("unable to find ", tumor_id, " in object")
+  }
+  
+  cells_to_keep <- rownames(sobj@meta.data)[sobj@meta.data[[sample_col]] == tumor_id]
+  so_sub <- subset(sobj, cells = cells_to_keep)
+  stopifnot(all(names(clusts) %in% colnames(so_sub)))
+  so_sub$cnv_clusters <- clusts[colnames(so_sub)]
+  
+  n_cells <- table(so_sub$cnv_clusters)
+  groups_to_test <- names(n_cells[n_cells > max(min_cells,
+                                                (min_prop * ncol(so_sub)))])
+  
+  if(length(groups_to_test) < 2){
+    return(list(so = so_sub,
+                mkrs = NULL))
+  }
+  
+  mkrs <- wilcoxauc(so_sub, 
+                    group_by = "cnv_clusters", 
+                    groups_use = groups_to_test) %>% 
+    filter(logFC > 0,
+           padj < 0.05, 
+           pct_in > 0.10) %>% 
+    group_by(group) %>% 
+    arrange(padj, desc(logFC))
+  list(mdata = so_sub@meta.data[, "cnv_clusters", drop = FALSE],
+       mkrs = mkrs)
+}
+```
+
+
+```{r}
+subgroups <- c("shh", "gp3", "gp4")
+so_fns <- file.path(obj_dir, c(
+  file.path("shh", "shh.qs"),
+  file.path("gp34", "gp3_only.qs"),
+  file.path("gp34", "gp4_only.qs")))
+                    
+clusters <- c(
+  "tumor_subpopulations_shh",
+  "tumor_subpopulations_gp3",
+  "tumor_subpopulations_gp4"
+)
+
+sos <- map(so_fns, 
+            ~qread(.x, nthreads = 4, use_alt_rep = FALSE))
+
+names(sos) <- c("SHH", "GP3", "GP4")
+```
+
+```{r}
+cnvs <- map(subgroups, 
+            ~read_cnv_trees(file.path("inferCNV_v2",
+             .x, .x,  "infercnv.observations_dendrogram.txt")))
+names(cnvs) <- c("SHH", "GP3", "GP4")
+
+# merge dendrograms from replicated samples
+cnvs$GP4[['934']] <- merge(cnvs$GP4[['934']], cnvs$GP4[['943']])
+cnvs$GP4[['943']] <- NULL
+cnvs$GP4[['966']] <- merge(cnvs$GP4[['966']], cnvs$GP4[['966-2']])
+cnvs$GP4[['966-2']] <- NULL
+
+mkr_res <- map2(sos, cnvs,
+   ~{
+     ids <- names(.y)
+     res <- map(ids, function(id){
+       cluster_cnvs(id, ptrees = .y, sobj = .x, cut_height = 40)})
+     names(res) <- ids
+     res})
+
+
+mdata <- map(mkr_res, 
+             ~map_dfr(.x, function(upn){upn$mdata}))
+
+sos <- map2(sos, mdata, 
+            ~{
+              og_mdata <- .x@meta.data %>% 
+              rownames_to_column("cell")
+             new_mdata <- rownames_to_column(.y, "cell")
+             new_mdata <- left_join(og_mdata, new_mdata, 
+                                    by = "cell") %>% 
+               mutate(cnv_clusters = ifelse(is.na(cnv_clusters),
+                                            -1,
+                                            cnv_clusters),
+                      cnv_clusters = as.character(cnv_clusters)) %>% 
+               column_to_rownames("cell")
+             .x@meta.data <- new_mdata
+             .x
+            })
+```
+
+
+## Generate per sample UMAPs from neoplastic cells
+
+Shown below are the clusters derived from the CNV data on the left and the subpopulation clusters on the right. 
+
+```{r per_sample_umaps}
+
+so_subs <- map2(sos, mdata,
+                ~{
+                  to_map <- unique(.x$UPN)
+                  res <- map(to_map,
+                      function(upn){
+                        tmp_so <- subset(.x, subset = UPN == upn)
+                        tmp_so <- FindVariableFeatures(tmp_so) %>% 
+                          ScaleData() %>% 
+                          RunPCA() %>% 
+                          RunUMAP(dims = 1:20)
+                        tmp_so
+                      })
+                  names(res) <- to_map
+                  res
+                  })
+```
+
+```{r, fig.width = 12, fig.height = 3.5}
+imap(unlist(so_subs), 
+    ~{
+      umaps <- plot_umap(.x, 
+               c("cnv_clusters", 
+                 str_c("tumor_subpopulations_",
+                       str_to_lower(str_sub(.y, 1, 3)))), 
+               pt_size = 1,
+               .cols = c(palette_OkabeIto, discrete_palette_default),
+               sorted = "random",
+               legend_title = "") 
+      props <- plot_cell_proportions(.x,"cnv_clusters",
+                      str_c("tumor_subpopulations_",
+                       str_to_lower(str_sub(.y, 1, 3))),
+                      cols = c(palette_OkabeIto, discrete_palette_default)
+                      ) + labs(fill = "",
+                               x = "cnv_clusters")
+      p <- c(umaps, list(props))
+      plot_grid(plotlist = p, ncol = 3, rel_widths = c(0.9, 1, 1.2))
+      })
+
+
+```
+
+```{r}
+selected_markers <- map(mkr_res, 
+    ~map(.x, 
+         function(x){
+           if(is.null(x[[2]])){
+             return(NA)
+           }
+           markers <- filter(x[[2]], logFC > 0.25) 
+           n_markers <- markers %>% 
+             nrow()
+           n_groups <- length(unique(x[[2]]$group))
+           message(n_markers / n_groups)
+           markers %>% 
+             group_by(group) %>% 
+             arrange(padj, desc(logFC), .by_group = T)
+         }))
+```
+
+## SHH subclonal markers
+
+Next I've calculated markers for each cluster from the CNV analysis. Shown below are the top 10 markers of each cluster from tumors with evidence for subclones.  
+
+
+```{r, results = 'asis'}
+to_print <- selected_markers$SHH[!is.na(selected_markers$SHH)]
+iwalk(to_print, ~ {
+  cat('\n### Tumor: ', .y, '{.tabset}  \n')
+  iwalk(split(.x, .x$group), 
+    ~{
+      cat('\n### cnv cluster: ', .y, '\n')
+      cat(rmarkdown:::print.paged_df(rmarkdown::paged_table(head(.x, 10),
+                                                           options =   list(cols.min.print = 10))))
+      cat("\n\n---\n\n<br>\n\n<br>\n\n")
+    })
+  cat("\n\n---\n\n<br>\n\n<br>\n\n")
+})
+```
+
+
+## GP3 subclonal markers
+
+```{r, results = 'asis'}
+to_print <- selected_markers$GP3[!is.na(selected_markers$GP3)]
+iwalk(to_print, ~ {
+  cat('\n### Tumor: ', .y, '{.tabset}  \n')
+  iwalk(split(.x, .x$group), 
+    ~{
+      cat('\n### cnv cluster: ', .y, '\n')
+      cat(rmarkdown:::print.paged_df(rmarkdown::paged_table(head(.x, 10),
+                                                           options =   list(cols.min.print = 10))))
+      cat("\n\n---\n\n<br>\n\n<br>\n\n")
+    })
+  cat("\n\n---\n\n<br>\n\n<br>\n\n")
+})
+```
+
+## GP4 subclonal markers
+
+```{r, results = 'asis'}
+to_print <- selected_markers$GP4[!is.na(selected_markers$GP4)]
+iwalk(to_print, ~ {
+  cat('\n### Tumor: ', .y, '{.tabset}  \n')
+  iwalk(split(.x, .x$group), 
+    ~{
+      cat('\n### cnv cluster: ', .y, '\n')
+      cat(rmarkdown:::print.paged_df(rmarkdown::paged_table(head(.x, 10),
+                                                           options =   list(cols.min.print = 10))))
+      cat("\n\n---\n\n<br>\n\n<br>\n\n")
+    })
+  cat("\n\n---\n\n<br>\n\n<br>\n\n")
+})
+```
+
+## Marker table
+
+The full markers are written out to an excel file
+```{r}
+library(openxlsx)
+
+unlist(selected_markers, recursive = F) %>% 
+  .[!is.na(.)] %>% 
+  write.xlsx(., file.path(tbls_dir, "subclones_markers.xlsx"))
+```
+
+## software versions used
+
+```{r}
+sessioninfo::session_info()
+```

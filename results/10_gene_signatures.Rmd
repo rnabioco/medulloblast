@@ -874,7 +874,7 @@ so <- RunHarmony(so,
           reduction.name = "Harmony_UMAP_3")
 
 
-so$subgroup <- factor(so$subgroup_small, levels = c("GP3",
+so$subgroup <- factor(so$subgroup, levels = c("GP3",
     "GP4",
     "SHH",
     "GP3 model (Myc-T58A/dn-Trp53)",
@@ -1565,6 +1565,7 @@ save_plot(file.path(fig_dir, "shh_cell_type_umap.pdf"),
           p,
           base_asp = 2.5)
 ```
+
 
 ## Summary files/heatmaps
 

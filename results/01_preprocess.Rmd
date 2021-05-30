@@ -25,7 +25,7 @@ knitr::opts_chunk$set(cache.lazy = FALSE)
 
 
 ```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
-source(here::here("/R/utils.R"))
+source(here::here("R/utils.R"))
 
 rmd_dir <- "preprocess"
 
@@ -56,7 +56,7 @@ mdata_updated <- read_excel(file.path(doc_dir,
          date = ...7,
          fq_id = ...8 ) %>% 
   filter(subgroup != "LGG") %>% 
-  select(UPN, subgroup)
+  dplyr::select(UPN, subgroup)
 
 mdata <- left_join(mdata_updated, mdata, by = "UPN")
 

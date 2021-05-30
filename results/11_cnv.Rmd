@@ -22,7 +22,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r libs}
-source(here::here("/R/utils.R"))
+source(here::here("R/utils.R"))
 library(ComplexHeatmap)
 library(presto)
 library(openxlsx)
@@ -365,7 +365,7 @@ plot_cnv_heatmap <- function(ob_dat,
     mutate(chrom = str_remove(chrom, "chr"), 
            chrom = factor(chrom, levels = unique(chrom))) %>% 
     column_to_rownames("gene") %>% 
-    select(-start, -stop) 
+    dplyr::select(-start, -stop) 
 
   
   ob_annot <- data.frame(
@@ -430,7 +430,7 @@ plot_cnv_heatmap <- function(ob_dat,
   
   dynamic_resize <- 1
   nobs <- 100
-  pdf(str_c("hmap_", grp, ".pdf"),
+  pdf(str_c("thmap_", grp, ".pdf"),
       useDingbats=FALSE,
       width=11,
       height = 9 + dynamic_resize * 3.6 * (nobs - 200)/200 )
